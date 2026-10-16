@@ -48,7 +48,7 @@ Then ask Claude Code to "run co-codex doctor", or run it yourself:
 node ~/.claude/skills/co-codex/scripts/co-codex.mjs doctor
 ```
 
-The CLI is a single Node script, so any agent that can run shell commands can use it. Only `SKILL.md` is specific to Claude Code.
+The CLI is a single Node script, so any agent that can run shell commands can use it. Only `SKILL.md` is specific to Claude Code. To run it without cloning: `npx -y github:JK-G/co-codex doctor`.
 
 ## Quick start
 
