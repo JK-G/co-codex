@@ -1,0 +1,13 @@
+{
+  "name": "co-codex",
+  "version": "0.1.0",
+  "description": "Hand tasks to OpenAI Codex from Claude Code: message an open Codex window or spawn a session, pick a quality tier that sets the model and effort, and collect every image Codex generates",
+  "author": {
+    "name": "JK-G",
+    "url": "https://github.com/JK-G"
+  },
+  "homepage": "https://github.com/JK-G/co-codex",
+  "repository": "https://github.com/JK-G/co-codex",
+  "license": "MIT",
+  "keywords": ["codex", "openai", "delegation", "image-generation", "gpt-image-2", "multi-agent"]
+}

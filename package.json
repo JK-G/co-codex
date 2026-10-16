@@ -1,0 +1,38 @@
+{
+  "name": "co-codex",
+  "version": "0.1.0",
+  "description": "Hand tasks to OpenAI Codex from Claude Code (or any agent), steer model and effort with quality tiers, and collect the images Codex generates",
+  "type": "module",
+  "license": "MIT",
+  "author": "JK-G (https://github.com/JK-G)",
+  "homepage": "https://github.com/JK-G/co-codex",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JK-G/co-codex.git"
+  },
+  "bin": {
+    "co-codex": "skills/co-codex/scripts/co-codex.mjs"
+  },
+  "files": [
+    "skills/",
+    ".claude-plugin/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/unit.test.mjs test/cli.test.mjs"
+  },
+  "keywords": [
+    "codex",
+    "openai",
+    "claude-code",
+    "claude-code-plugin",
+    "agent-skill",
+    "image-generation",
+    "gpt-image",
+    "multi-agent"
+  ]
+}
