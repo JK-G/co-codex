@@ -514,5 +514,79 @@ test("wait --message finds a message queued behind a running turn; plain wait ta
     ok(here);
     assert.match(here.stdout, /from here/);
   });
+test("opinion: fresh read-only session on the high tier, verdict rendered", async t => {
+    const { cli, thread, dir } = sandbox(t);
+    // Even a user config that gives spawned sessions full access must not reach an opinion.
+    fs.writeFileSync(path.join(dir, "no-user-config.json"), JSON.stringify({ spawn: { sandbox: "danger-full-access" } }));
+    const r = await cli(["opinion", "Rename the column, then deploy.", "--on", "migration plan", "--name", "op1", "--file", "docs/plan.md"]);
+    ok(r, "opinion");
+    assert.match(r.stdout, /^Verdict: sound-with-changes \(confidence medium\)/);
+    assert.match(r.stdout, /\[high\] no rollback\n      why: data loss\n      do: add one\n      evidence: plan step 3/);
+    assert.match(r.stdout, /Agrees with:\n  - step order/);
+    assert.match(r.stderr, /asked Codex for a second opinion: "op1" .*gpt-6\.1-sol \/ high, read-only, independent opinion/);
+    const th = thread("op1");
+    assert.equal(th.sandbox, "read-only");
+    assert.equal(th.approvalPolicy, "never");
+    assert.equal(th.model, "gpt-6.1-sol");
+    const sent = th.turns[0].input[0].text;
+    assert.match(sent, /Second opinion requested on a migration plan\./);
+    assert.match(sent, /Claude's conclusion is left out on purpose/);
+    assert.match(sent, /- docs\/plan\.md/);
+    assert.match(sent, /Material:\nRename the column, then deploy\.$/);
+    assert.ok(th.turns[0].outputSchema, "the turn asks for structured output");
+  });
+
+  test("opinion --mode challenge --json returns the parsed opinion", async t => {
+    const { cli, thread } = sandbox(t);
+    const out = json(await cli(["opinion", "My position: ship on Friday.", "--mode", "challenge", "--name", "op2", "--tier", "draft", "--json"]));
+    assert.equal(out.kind, "opinion");
+    assert.equal(out.mode, "challenge");
+    assert.equal(out.model, "gpt-6-luna");
+    assert.equal(out.opinion.verdict, "sound-with-changes");
+    assert.equal(out.opinion.concerns[0].severity, "high");
+    assert.equal(out.text, null);
+    assert.match(thread("op2").turns[0].input[0].text, /Try to refute it/);
+  });
+
+  test("opinion shows Codex's text when it ignores the schema", async t => {
+    const { cli } = sandbox(t);
+    const r = await cli(["opinion", "[[noschema]] plan", "--name", "op3"]);
+    ok(r);
+    assert.match(r.stdout, /^echo: Second opinion requested on a plan\./);
+  });
+
+  test("opinion --diff, --base and --commit use Codex's built-in reviewer", async t => {
+    const { cli, thread } = sandbox(t);
+    const d = await cli(["opinion", "--diff", "--name", "d1"]);
+    ok(d, "--diff");
+    assert.equal(d.stdout.trim(), "mock review of uncommittedChanges");
+    assert.match(d.stderr, /code review of uncommitted changes/);
+    assert.deepEqual(thread("d1").turns[0].review, { type: "uncommittedChanges" });
+    assert.equal(thread("d1").turns[0].delivery, "inline");
+    assert.deepEqual(thread("d1").settingsLog, [{ effort: "high" }]);
+    assert.equal(thread("d1").sandbox, "read-only");
+    const b = json(await cli(["opinion", "--base", "main", "--name", "d2", "--json"]));
+    assert.equal(b.kind, "code-review");
+    assert.equal(b.text, "mock review of baseBranch main");
+    assert.deepEqual(b.target, { type: "baseBranch", branch: "main" });
+    const c = await cli(["opinion", "--commit", "abc123", "--name", "d3"]);
+    ok(c, "--commit");
+    assert.equal(c.stdout.trim(), "mock review of commit abc123");
+  });
+
+  test("opinion rejects text with --diff, a bad --mode and a taken name", async t => {
+    const { cli } = sandbox(t);
+    const withText = await cli(["opinion", "look here", "--diff"]);
+    assert.equal(withText.code, 1);
+    assert.match(withText.stderr, /takes no text/);
+    const mode = await cli(["opinion", "plan", "--mode", "angry"]);
+    assert.equal(mode.code, 1);
+    assert.match(mode.stderr, /--mode must be one of independent, challenge/);
+    ok(await cli(["opinion", "plan", "--name", "same"]));
+    const taken = await cli(["opinion", "plan", "--name", "same"]);
+    assert.equal(taken.code, 1);
+    assert.match(taken.stderr, /a session named "same" already exists/);
+  });
 });
+
 

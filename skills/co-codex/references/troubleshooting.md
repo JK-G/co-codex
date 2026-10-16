@@ -56,3 +56,4 @@
 | `CO_CODEX_BIN` | Path of the `codex` executable, or a JSON array such as `["node", "/path/to/wrapper.mjs"]` |
 | `CO_CODEX_CONFIG` | Path of the user config file |
 | `XDG_CONFIG_HOME` | Base folder of the user config (default `~/.config`) |
+| `CO_CODEX_DEBUG` | Set to `1` to log daemon events and history polls on stderr |

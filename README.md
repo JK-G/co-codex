@@ -14,6 +14,7 @@ Unofficial. Not affiliated with OpenAI or Anthropic.
 - `--tier draft|standard|high|max` chooses the model and effort from the models your account offers: GPT-6 Luna for drafts, GPT-6.1 Sol for everyday and final work, GPT-6 Astra for the hardest jobs.
 - `images` lists or copies every image a turn produced, following subagent threads, and logs each file with its prompt in `co-codex-images.jsonl`.
 - `limits` shows how much of the five-hour and weekly windows you have used and when they reset. A turn that runs into the limit exits with code 4 and the reset time.
+- `opinion` asks Codex for an independent, read-only second opinion on a plan, a decision or a code change, in addition to Claude's own review.
 - `doctor` checks Codex, the daemon, your sign-in, the tier models, and every protocol method co-codex relies on.
 
 ## Requirements
@@ -52,7 +53,9 @@ The CLI is a single Node script, so any agent that can run shell commands can us
 
 ## Quick start
 
-In Claude Code, ask in plain words: "Have Codex make three draft icons for the settings screen and show them to me." The skill picks the command, the tier and the output folder.
+In Claude Code, just ask for the image: "generate an image of a red apple", "make me an app icon for a weather app", or in Polish "wygeneruj mi obraz". You do not have to mention Codex. Claude cannot draw by itself, so the skill takes over: it writes the brief, starts a Codex session, waits, copies the PNG into your project (`./generated-images` unless you name a folder or the project has an assets folder) and checks it before showing you the path. Follow-ups such as "make it bluer" go to the same session with the previous image attached.
+
+Tasks for Codex work the same way: "Have Codex review this module and tell me what it found."
 
 To drive it by hand (`co-codex` below stands for `node <skill dir>/scripts/co-codex.mjs`):
 
@@ -114,6 +117,38 @@ A 2D pixel-art game prototype needed character sprite sheets, armour and weapon 
 
 UI mockups and ads follow the same loop. Explore several variants on `draft`, pick one, then finalize it on `high` with the pick attached through `--ref`. [references/image-briefs.md](skills/co-codex/references/image-briefs.md) has brief templates for sprite sheets, UI mockups, ad creatives in several sizes, and icon sets.
 
+## Second opinion from Codex
+
+Claude can ask Codex to review a plan, a decision, a design or a code change. Codex is a different model family, so it tends to miss different things than Claude does. It is always an extra layer: Claude still does its own review, and you decide.
+
+- It runs only when you ask ("get a second opinion from Codex on this plan", "zapytaj Codexa o zdanie"), or when your CLAUDE.md or Claude's memory says to do it for that kind of work. The second time you ask on similar work, Claude offers to save it as a standing preference.
+- Codex works in a fresh read-only session. It can read the project and check claims against the code, but it cannot change anything.
+- By default Codex does not see Claude's conclusion, so its view is not anchored to it. `--mode challenge` sends Claude's position and asks Codex to refute it.
+- Plans and decisions come back as a verdict (`sound`, `sound-with-changes` or `rethink`), a confidence level, ranked concerns with evidence, alternatives and questions. Code changes go through Codex's built-in reviewer: `--diff` for uncommitted changes, `--base <branch>`, or `--commit <sha>`.
+- Claude then reports where both agree, what Codex found that Claude missed, and where Claude disagrees with Codex and why.
+
+A run from 2026-10-16 on a deliberately flawed migration plan (trimmed):
+
+```
+co-codex opinion "Goal: rename users.email to users.login_email in a production Postgres database, zero downtime.
+Plan: 1. Deploy the app version that uses login_email. 2. ALTER TABLE users RENAME COLUMN email TO login_email.
+3. No rollback plan needed, a rename is instant." --on "database migration plan"
+
+Verdict: rethink (confidence high)
+The proposed ordering breaks live requests and does not meet zero-downtime requirements.
+
+Concerns:
+  [high] Step 1 deploys code against a column that does not exist yet.
+  [high] A fast metadata operation can still cause an outage through locking.
+      evidence: PostgreSQL specifies ACCESS EXCLUSIVE as the default ALTER TABLE lock ...
+  [medium] Execution speed does not eliminate the need for rollback and validation.
+
+Alternatives:
+  - Use expand-and-contract: add a nullable login_email, ... finally remove email after every old consumer is retired.
+```
+
+On a small diff that changed a bill-splitting function to round every share, `opinion --diff` returned a P1 finding with the file and line: `split(10, 3)` now returns `[3, 3, 3]`, which no longer adds up to the total.
+
 ## Commands
 
 | Command | What it does |
@@ -125,6 +160,8 @@ UI mockups and ads follow the same loop. Explore several variants on `draft`, pi
 | `read <session> [--turns n]` | Print recent answers |
 | `stop <session>` | Interrupt the running turn |
 | `images <session> [--turns n] [--out dir]` | List or copy the images of recent turns, subagents included |
+| `opinion <text> [--on what] [--mode challenge] [--file path]` | Read-only second opinion on a plan, decision, design or text |
+| `opinion --diff \| --base <branch> \| --commit <sha>` | Codex's built-in code review of a change |
 | `models` | Models on your account and how each tier resolves |
 | `limits` | Usage of the current windows and reset times |
 | `doctor` | Check the setup and the protocol |
@@ -172,6 +209,11 @@ Paths are compared case-insensitively on Windows and macOS and through `realpath
 ## Related
 
 If you mainly want Codex to review code from inside Claude Code, look at OpenAI's official plugin [openai/codex-plugin-cc](https://github.com/openai/codex-plugin-cc) first. co-codex is built around handing whole tasks to Codex, choosing the model per task, and getting images back.
+
+## Tests
+
+- `npm test` runs 64 unit and end-to-end tests against a mock Codex. CI runs them on Ubuntu, macOS and Windows with Node 20, 22 and 24.
+- `claude plugin eval . --no-publish` runs the trigger evals in `evals/`: 9 requests that must load the skill (image requests in English and Polish that never name Codex, a task for Codex, two requests for a second opinion) and 5 that must not (image-processing code, a question about images on a website, a plan review and a code review that do not mention Codex, a general question). On 2026-10-16 all 14 passed twice each with Claude Code 2.1.301. A full run cost about $4 of Claude usage.
 
 ## License
 

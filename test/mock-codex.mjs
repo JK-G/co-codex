@@ -29,7 +29,7 @@ const PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9
 
 const METHODS = [
   "initialize", "thread/loaded/list", "thread/read", "thread/list", "thread/start", "thread/name/set",
-  "thread/resume", "thread/settings/update", "thread/turns/list", "thread/queue/add", "thread/queue/list", "turn/start",
+  "thread/resume", "thread/settings/update", "thread/turns/list", "thread/queue/add", "thread/queue/list", "turn/start", "review/start",
   "turn/interrupt", "model/list", "account/read", "account/rateLimits/read",
 ];
 const NOTIFICATIONS = ["item/started", "item/completed", "turn/started", "turn/completed", "thread/status/changed"];
@@ -162,6 +162,22 @@ function complete(s, thread, turn) {
     s.limitHit = true;
     turn.status = "failed";
     turn.error = { message: "You've hit your usage limit. Try again later.", codexErrorInfo: "usageLimitExceeded" };
+  } else if (turn.review) {
+    const review = `mock review of ${turn.review.type}${turn.review.branch ? " " + turn.review.branch : ""}${turn.review.sha ? " " + turn.review.sha : ""}`;
+    items.push({ type: "enteredReviewMode", id: nextId(s, "item"), review: "" });
+    items.push({ type: "exitedReviewMode", id: nextId(s, "item"), review });
+    items.push({ type: "agentMessage", id: nextId(s, "item"), text: review });
+    turn.status = "completed";
+    turn.error = null;
+  } else if (turn.outputSchema && !text.includes("[[noschema]]")) {
+    const opinion = {
+      verdict: "sound-with-changes", confidence: "medium", summary: "mock opinion",
+      agreements: ["step order"], alternatives: ["do less"], questions: ["why now?"],
+      concerns: [{ severity: "high", point: "no rollback", why: "data loss", suggestion: "add one", evidence: "plan step 3" }],
+    };
+    items.push({ type: "agentMessage", id: nextId(s, "item"), text: JSON.stringify(opinion) });
+    turn.status = "completed";
+    turn.error = null;
   } else {
     items.push({ type: "agentMessage", id: nextId(s, "item"), text: `echo: ${firstLine(turn.input)}` });
     turn.status = "completed";
@@ -247,7 +263,15 @@ const handlers = {
     if (p.effort) t.reasoningEffort = p.effort;
     if (p.model) t.model = p.model;
     const turn = addTurn(s, t, { input: p.input });
+    if (p.outputSchema) turn.outputSchema = p.outputSchema;
     return { after: () => schedule(t.id, turn), result: { turn: publicTurn(turn) } };
+  },
+  "review/start": (s, p) => {
+    const t = getThread(s, p.threadId);
+    const turn = addTurn(s, t, { input: [{ type: "text", text: "review" }] });
+    turn.review = p.target;
+    turn.delivery = p.delivery ?? null;
+    return { after: () => schedule(t.id, turn), result: { reviewThreadId: t.id, turn: publicTurn(turn) } };
   },
   "turn/interrupt": (s, p) => {
     const t = getThread(s, p.threadId);

@@ -1,6 +1,6 @@
 ---
 name: co-codex
-description: Hand a task to OpenAI Codex and read its answer. Message a Codex session the user has open in a terminal, or start a new one; pick a quality tier (draft, standard, high, max) that sets the Codex model and reasoning effort; collect every image Codex generated, its subagents included. Use when the user asks to give work to Codex, ask or check on Codex, generate images on their ChatGPT/Codex plan (game art, sprites, icons, UI mockups, ad creatives, illustrations), or run work that should spend their Codex quota instead of Claude's.
+description: Generate images, and hand other work to OpenAI Codex. Claude cannot create images itself, so use this skill whenever the user asks for an image in any wording or language - generate, create, draw, make, design or edit an image, picture, photo, illustration, icon, logo, sprite, texture, mockup, banner, poster, thumbnail or ad creative (Polish - wygeneruj obraz, zrób grafikę, narysuj, stwórz obrazek, ikonę, logo, zdjęcie). Codex makes the image with gpt-image-2 on the user's ChatGPT plan and the files come back into the project. Also use it when the user asks to give a task to Codex, ask or check on Codex, or run work on their Codex quota instead of Claude's. It messages an open Codex window or starts a session, picks a quality tier (draft, standard, high, max) that sets the Codex model and effort, and collects every image, subagents included. When the user asks for it, or a standing preference of theirs says so, it also gets an independent second opinion from Codex on a plan, decision, design or code diff, in addition to Claude's own review and never instead of it.
 ---
 
 # co-codex
@@ -24,11 +24,87 @@ status lines go to stderr.
 | `wait <session> [--message id]` | Wait for a turn and print its answer (the id `send` prints, else the last queued message, else the latest turn) |
 | `read <session> [--turns n]` / `stop <session>` | Print recent answers, interrupt the running turn |
 | `images <session> [--turns n] [--out dir]` | List or copy the images of recent turns, subagents included |
+| `opinion <text> [--mode challenge]` / `opinion --diff` | Read-only second opinion: a verdict on a plan or decision, or Codex's code review of a diff |
 | `models` / `limits` / `doctor` | Tier resolution, quota left and reset times, setup check |
 | `init [--write]` | Print, or append to ./AGENTS.md, the note that tells Codex how to answer |
 
 `<session>` is a UUID, an exact session name, or `open` (the one Codex window open in this
 project). Pass long tasks as `-` and pipe them on stdin.
+
+## When the user simply asks for an image
+
+Do not answer that you cannot make images, and do not interview the user. Go:
+
+1. Turn the request into a brief: subject, style, aspect or size, background (transparent when
+   it is an icon, sprite or logo), every word of text exactly as it must appear. Fill gaps with
+   sensible choices and name them in your reply. Ask only when something essential is unknowable,
+   such as the exact wording of a logo.
+2. Start a fresh session that only generates (read-only sandbox: Codex writes nothing, co-codex
+   copies the files), with Bash `run_in_background: true`, since images take a minute or more:
+
+   ```
+   node "${CLAUDE_SKILL_DIR}/scripts/co-codex.mjs" spawn "<brief>" --name img-<short-slug> --tier standard --images --sandbox read-only --wait --out <folder> --json
+   ```
+
+   Tier: `draft` when the user wants something quick, a sketch or several options; `high` for
+   final, production or print use; `max` only when asked. Folder: where the user said, else the
+   project's existing images or assets folder, else `./generated-images`. Several images or
+   variants in one request: one session, with the count in the brief.
+3. When it finishes, Read every copied PNG, check it against the brief, and give the user the
+   file paths with one line on what you checked. Say in one line that it used their Codex quota.
+4. Changes ("make it bluer", "without the text"): send them to the same session with the
+   previous file attached:
+   `send img-<short-slug> "<change>" --ref <previous file> --images --wait --out <folder> --json`.
+5. If `doctor` or the command says Codex is missing or signed out, tell the user to install
+   Codex (https://developers.openai.com/codex) and run `codex login`.
+
+## Second opinion from Codex (optional, always in addition)
+
+Codex is a different model family, so it misses different things. `opinion` asks it for an
+independent review in a fresh read-only session. It is an extra layer on top of your own work,
+never a replacement for your analysis, for a reviewer the user chose (such as an Opus or Fable
+subagent), or for the user's decision.
+
+**When to run it**
+
+- The user asks for it in this conversation: "ask Codex for a second opinion", "let Codex check
+  this plan", "zapytaj Codexa o zdanie", "niech Codex to zweryfikuje", "zderz to z Codexem".
+- Or a standing preference says so: CLAUDE.md, project instructions or memory tell you to get
+  Codex's opinion on this kind of work, or memory shows the user asked for it on the same kind of
+  work at least twice before. Then run it without asking, and say in one line which preference
+  you followed and that the user can switch it off.
+- The second time the user asks for a Codex opinion on similar work, offer once to save it as a
+  standing preference, naming the kind of work (for example "deployment and migration plans").
+  Save it only after a yes.
+- Otherwise do not run it. For a high-stakes plan or decision (production deployment, data
+  migration, architecture, security) you may mention once per conversation that a Codex second
+  opinion is available. Never for routine work, and not again after the user declines.
+
+**How**
+
+1. Do your own review as you would anyway. Start Codex in parallel with Bash
+   `run_in_background: true`; an opinion takes a few minutes.
+2. Plans, decisions, designs and copy: send the goal, the constraints and the material itself, and
+   list the files Codex should read. Leave your own verdict out, so Codex's view stays independent:
+
+   ```
+   node "${CLAUDE_SKILL_DIR}/scripts/co-codex.mjs" opinion - --on "<what it is>" --file <path> --json < material.md
+   ```
+
+   Use `--mode challenge`, with your position in the text, when the user wants your reasoning
+   attacked or when you and the user disagree.
+3. Code changes: `opinion --diff` (uncommitted), `--base <branch>` or `--commit <sha>` runs Codex's
+   built-in code reviewer.
+4. Tier: `high` by default; `max` for decisions that are expensive to undo; `standard` for a
+   quick check.
+
+**Using the answer**
+
+- Codex's opinion is evidence, not authority. Check every concern against the code or the facts
+  before you accept it.
+- Report in three parts: where you and Codex agree, what Codex found that you missed (and whether
+  you verified it), and where you disagree with Codex and why. Quote its verdict and confidence.
+- The user decides. Do not change the plan on Codex's word alone.
 
 ## Before the first task
 

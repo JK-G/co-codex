@@ -29,6 +29,15 @@ Sessions
   images <session> [--turns <n> | --turn <id>] [--out <dir>] [--json]
                                       List (and copy) the images of the last turns, subagents included
 
+Second opinion (read-only, in addition to your own review)
+  opinion <text|-> [--on <what>] [--mode independent|challenge] [--file <path>]... [--tier <name>]
+                                      Fresh read-only session; Codex reviews a plan, decision, design or
+                                      text and answers with a verdict, ranked concerns, alternatives and
+                                      questions. challenge: the text carries your position, Codex attacks it
+  opinion --diff | --base <branch> | --commit <sha> [--tier <name>]
+                                      Codex's built-in code reviewer on uncommitted changes, a branch or a commit
+                                      (default tier for opinions: high; --name, --cwd, --timeout, --json work too)
+
 Account and setup
   models                              Models this account offers and what each tier resolves to
   limits [--json]                     Usage of the current windows (5-hour, weekly) and when they reset
@@ -62,15 +71,15 @@ const ALL_SOURCES = ["cli", "vscode", "exec", "appServer", "unknown"]; // thread
 const SANDBOXES = ["danger-full-access", "workspace-write", "read-only"];
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SKILL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const FLAGS = new Set(["wait", "all", "json", "images", "subagents", "fast", "write", "keep"]);
-const VALUES = new Set(["name", "tier", "model", "effort", "timeout", "out", "cwd", "sandbox", "turns", "turn", "message", "ref"]);
-const REPEATABLE = new Set(["ref"]);
+const FLAGS = new Set(["wait", "all", "json", "images", "subagents", "fast", "write", "keep", "diff"]);
+const VALUES = new Set(["name", "tier", "model", "effort", "timeout", "out", "cwd", "sandbox", "turns", "turn", "message", "ref", "on", "mode", "file", "base", "commit"]);
+const REPEATABLE = new Set(["ref", "file"]);
 // How many positional arguments each command takes, so a stray word is an error instead of the message.
-const ARITY = { list: 0, spawn: 1, send: 2, wait: 1, read: 1, stop: 1, images: 1, models: 0, limits: 0, doctor: 0, init: 0 };
+const ARITY = { list: 0, spawn: 1, send: 2, wait: 1, read: 1, stop: 1, images: 1, opinion: 1, models: 0, limits: 0, doctor: 0, init: 0 };
 // The daemon methods and notifications co-codex relies on; `doctor` checks them against the installed Codex.
 const USED_METHODS = [
   "thread/loaded/list", "thread/read", "thread/list", "thread/resume", "thread/turns/list", "thread/queue/add", "thread/queue/list",
-  "thread/start", "thread/name/set", "thread/settings/update", "turn/start", "turn/interrupt",
+  "thread/start", "thread/name/set", "thread/settings/update", "turn/start", "turn/interrupt", "review/start",
   "model/list", "account/read", "account/rateLimits/read",
 ];
 const USED_NOTIFICATIONS = ["item/started", "item/completed", "turn/completed", "thread/status/changed"];
@@ -81,6 +90,39 @@ const SUBAGENTS_NOTE =
 const IMAGES_NOTE =
   "You do not need to report where generated images are stored; they are collected from this turn automatically. " +
   "If the task asks you to save images to files, end your answer with those file paths.";
+
+const OPINION_MODES = ["independent", "challenge"];
+// The final message of an opinion turn is constrained to this shape (strict: every key required).
+const OPINION_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["verdict", "confidence", "summary", "agreements", "concerns", "alternatives", "questions"],
+  properties: {
+    verdict: { type: "string", enum: ["sound", "sound-with-changes", "rethink"] },
+    confidence: { type: "string", enum: ["low", "medium", "high"] },
+    summary: { type: "string" },
+    agreements: { type: "array", items: { type: "string" } },
+    concerns: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["severity", "point", "why", "suggestion", "evidence"],
+        properties: {
+          severity: { type: "string", enum: ["high", "medium", "low"] },
+          point: { type: "string" },
+          why: { type: "string" },
+          suggestion: { type: "string" },
+          evidence: { type: "string" },
+        },
+      },
+    },
+    alternatives: { type: "array", items: { type: "string" } },
+    questions: { type: "array", items: { type: "string" } },
+  },
+};
+
+const debug = (...args) => { if (process.env.CO_CODEX_DEBUG) console.error("[co-codex debug]", ...args); };
 
 class BridgeError extends Error {
   constructor(message, exitCode = 1) { super(message); this.exitCode = exitCode; }
@@ -262,19 +304,26 @@ function waitForTurn(rpc, threadId, { turnId = null, match = {}, timeoutS, subsc
       polling = true;
       try {
         const turns = await recentTurns(rpc, threadId, turnId ? 3 : RECENT, "summary");
+        debug("poll", turns.map(t => `${t.id}:${t.status}`).join(" "), final ? `final:${final.status}` : "");
         const at = turns.findIndex(t => (turnId ? t.id === turnId : match.byTurn?.(t)));
         if (at >= 0) {
           found(turns[at].id);
-          if (turns[at].status !== "inProgress") return finish(resolve, (await fullTurn(turnId, at + 1)) ?? turns[at]);
+          if (turns[at].status !== "inProgress") {
+            // Seen live once: the summary view called a turn finished while the full view still had it running.
+            const full = await fullTurn(turnId, at + 1);
+            if (!full || full.status !== "inProgress") return finish(resolve, full ?? turns[at]);
+            debug("summary and full views disagree; still waiting");
+          }
         }
-        if (final) finish(resolve, final); // the turn ended but the history has not caught up
+        if (final?.status && final.status !== "inProgress") finish(resolve, final); // the turn ended but the history has not caught up
       } catch {
-        if (final) finish(resolve, final); // a lost connection is reported through rpc.closed; anything else retries
+        if (final?.status && final.status !== "inProgress") finish(resolve, final); // a lost connection is reported through rpc.closed; anything else retries
       } finally { polling = false; }
     };
     const listener = msg => {
       const p = msg.params ?? {};
       if (p.threadId !== threadId) return;
+      if (!/delta$/.test(msg.method)) debug("event", msg.method, p.turn?.id ?? p.turnId ?? "", p.turn?.status ?? "");
       if ((msg.method === "item/started" || msg.method === "item/completed") && !turnId && match.byItem?.(p.item)) found(p.turnId);
       if (msg.method === "item/completed" && p.item) seen.set(p.item.id, { turnId: p.turnId, item: p.item });
       if (msg.method === "thread/status/changed") {
@@ -368,8 +417,48 @@ async function report(rpc, run, turn, opt) {
     if (answer) console.log(answer);
     if (kept.length) console.error(`${kept.length} image(s) generated${copied.length ? `, ${copied.length} copied to ${opt.out}` : `; copy them with: images ${run.threadId} --out <dir>`}`);
   }
+  failIfBad(turn, limit);
+}
+
+function failIfBad(turn, limit) {
   if (limit) throw new BridgeError(`Codex hit the usage limit; it resets at ${limit.resetsAtLocal ?? "an unknown time (see limits)"}. Resend the unfinished part after that.`, 4);
   if (turn.status !== "completed") throw new BridgeError(`Codex turn ${turn.id} ended as "${turn.status}"${turn.error?.message ? ": " + turn.error.message : ""}`, 3);
+}
+
+function opinionPrompt(config, material, { on, mode, files }) {
+  return [
+    config.signature,
+    `Second opinion requested on a ${on}. Claude, another AI agent, is working on this with the user. The user wants ` +
+      "your independent view in addition to Claude's own review, not instead of it. You are read-only here: do not change any files.",
+    mode === "challenge"
+      ? "The material includes Claude's position. Try to refute it: make the strongest case against it, name the assumption " +
+        "most likely to be wrong, and say what evidence would change the conclusion. Concede the points that hold."
+      : "Form your own view. Claude's conclusion is left out on purpose, so it does not anchor you.",
+    files.length ? `Read these files yourself rather than trusting any summary:\n${files.map(f => `- ${f}`).join("\n")}` : "",
+    "Check claims against the code and files of this project where you can. Look for wrong assumptions, missing steps, " +
+      "risks and failure modes, ordering problems, and simpler or safer alternatives. Disagree where you have grounds and say " +
+      "why; agree briefly where it is sound. Do not invent problems to seem useful: an empty concerns list is a valid answer. " +
+      "Severity: high means it would cause failure, data loss, a security problem or large rework; medium means real cost " +
+      "or risk; low means an improvement. Put a file path with line, a command output or a quote in evidence when you have one.",
+    `Material:\n${material.trim()}`,
+  ].filter(Boolean).join("\n\n");
+}
+
+function renderOpinion(o) {
+  const out = [`Verdict: ${o.verdict} (confidence ${o.confidence})`, o.summary];
+  if (o.concerns?.length) {
+    out.push("", "Concerns:");
+    for (const c of o.concerns) {
+      out.push(`  [${c.severity}] ${c.point}`);
+      if (c.why) out.push(`      why: ${c.why}`);
+      if (c.suggestion) out.push(`      do: ${c.suggestion}`);
+      if (c.evidence) out.push(`      evidence: ${c.evidence}`);
+    }
+  }
+  for (const [title, xs] of [["Agrees with", o.agreements], ["Alternatives", o.alternatives], ["Questions", o.questions]]) {
+    if (xs?.length) out.push("", `${title}:`, ...xs.map(x => `  - ${x}`));
+  }
+  return out.join("\n");
 }
 
 const windowLabel = mins => mins === 300 ? "5-hour window" : mins === 10080 ? "weekly window" : mins ? `${mins}-minute window` : "window";
@@ -548,6 +637,57 @@ const commands = {
     }
     for (const i of kept) console.log(i.savedPath ?? `(inline image ${i.itemId}; use --out to save it)`);
     console.error(`${kept.length} image(s) in ${turns.length} turn(s)${failed.length ? `, ${failed.length} failed` : ""}${copied.length ? `; ${copied.filter(c => c.fresh).length} new file(s) in ${opt.out}` : ""}`);
+  },
+
+  // An independent, read-only review by Codex in addition to Claude's own: of a plan, decision,
+  // design or text (a structured verdict), or of code changes through Codex's built-in reviewer.
+  async opinion(rpc, ctx, { pos, opt }) {
+    const diff = !!(opt.diff || opt.base || opt.commit);
+    if (diff && pos[0]) throw new BridgeError("opinion --diff/--base/--commit reviews code changes and takes no text; for a focused review, pass the text without them");
+    const mode = opt.mode ?? "independent";
+    if (!OPINION_MODES.includes(mode)) throw new BridgeError(`--mode must be one of ${OPINION_MODES.join(", ")}`);
+    const run = await chooseRun(rpc, ctx.config, { ...opt, tier: opt.tier ?? ctx.config.opinionTier ?? "high" });
+    const material = diff ? null : opinionPrompt(ctx.config, await readText(pos[0]), { on: opt.on ?? "plan", mode, files: opt.file ?? [] });
+    const timeoutS = timeoutOf(opt);
+    const name = opt.name ?? `opinion-${new Date().toISOString().replace(/\D/g, "").slice(2, 14)}`;
+    if ((await sessionsNamed(rpc, name)).length) throw new BridgeError(`a session named "${name}" already exists; pick another --name`);
+    const started = await rpc.request("thread/start", {
+      cwd: path.resolve(opt.cwd ?? ctx.root),
+      sandbox: "read-only", // an opinion never changes the project, whatever the config says for spawn
+      approvalPolicy: "never",
+      threadSource: SOURCE,
+      ...(run.model ? { model: run.model } : {}),
+    });
+    const { thread } = started;
+    Object.assign(run, { threadId: thread.id, name, model: started.model ?? run.model });
+    await rpc.request("thread/name/set", { threadId: thread.id, name });
+    let turn, target = null;
+    if (diff) {
+      target = opt.commit ? { type: "commit", sha: opt.commit } : opt.base ? { type: "baseBranch", branch: opt.base } : { type: "uncommittedChanges" };
+      if (run.effort) await rpc.request("thread/settings/update", { threadId: thread.id, effort: run.effort });
+      ({ turn } = await rpc.request("review/start", { threadId: thread.id, target, delivery: "inline" }));
+    } else {
+      ({ turn } = await rpc.request("turn/start", { threadId: thread.id, input: [{ type: "text", text: material }], outputSchema: OPINION_SCHEMA, ...(run.effort ? { effort: run.effort } : {}) }));
+    }
+    const what = !diff ? `${mode} opinion` : target.type === "commit" ? `code review of ${target.sha}` : target.type === "baseBranch" ? `code review against ${target.branch}` : "code review of uncommitted changes";
+    console.error(`asked Codex for a second opinion: "${name}" ${thread.id} (${run.model ?? "default model"}${run.effort ? " / " + run.effort : ""}, read-only, ${what})`);
+    const done = await waitForTurn(rpc, thread.id, { turnId: turn.id, timeoutS, subscribed: true });
+    const limit = await usageLimit(rpc, done, []);
+    const answer = finalAnswer(done.items ?? []);
+    const review = diff ? ((done.items ?? []).filter(i => i.type === "exitedReviewMode" && i.review?.trim()).pop()?.review ?? answer) : null;
+    let parsed = null;
+    if (!diff && answer) { try { parsed = JSON.parse(answer); } catch { /* the model ignored the schema: its text is shown as is */ } }
+    const text = diff ? review : parsed ? null : answer;
+    if (opt.json) {
+      console.log(JSON.stringify({
+        threadId: thread.id, name, kind: diff ? "code-review" : "opinion", mode: diff ? null : mode, target,
+        model: run.model ?? null, effort: run.effort ?? null, status: done.status,
+        opinion: parsed, text: text || null, error: done.error?.message ?? null, limit,
+      }, null, 2));
+    } else if (parsed || text) {
+      console.log(parsed ? renderOpinion(parsed) : text);
+    }
+    failIfBad(done, limit);
   },
 
   async models(rpc, ctx) {
