@@ -25,7 +25,8 @@ status lines go to stderr.
 | `read <session> [--turns n]` / `stop <session>` | Print recent answers, interrupt the running turn |
 | `images <session> [--turns n] [--out dir]` | List or copy the images of recent turns, subagents included |
 | `opinion <text> [--mode challenge]` / `opinion --diff` | Read-only second opinion: a verdict on a plan or decision, or Codex's code review of a diff |
-| `models` / `limits` / `doctor` | Tier resolution, quota left and reset times, setup check |
+| `cleanup [--older-than 2d] [--name-prefix p] [--yes]` | List old sessions co-codex started here that no window has open; `--yes` deletes them |
+| `models` / `limits [--estimate n]` / `doctor` | Tier resolution, quota left and reset times (or the expected share for n images), setup check |
 | `init [--write]` | Print, or append to ./AGENTS.md, the note that tells Codex how to answer |
 
 `<session>` is a UUID, an exact session name, or `open` (the one Codex window open in this
@@ -43,18 +44,32 @@ Do not answer that you cannot make images, and do not interview the user. Go:
    copies the files), with Bash `run_in_background: true`, since images take a minute or more:
 
    ```
-   node "${CLAUDE_SKILL_DIR}/scripts/co-codex.mjs" spawn "<brief>" --name img-<short-slug> --tier standard --images --sandbox read-only --wait --out <folder> --json
+   node "${CLAUDE_SKILL_DIR}/scripts/co-codex.mjs" spawn "<brief>" --name img-<short-slug> --tier standard --images --names hero.png,icon.png --sandbox read-only --wait --out <folder> --json
    ```
 
    Tier: `draft` when the user wants something quick, a sketch or several options; `high` for
    final, production or print use; `max` only when asked. Folder: where the user said, else the
    project's existing images or assets folder, else `./generated-images`. Several images or
    variants in one request: one session, with the count in the brief.
-3. When it finishes, Read every copied PNG, check it against the brief, and give the user the
-   file paths with one line on what you checked. Say in one line that it used their Codex quota.
+   `--names` lists one file name per image, in the order the brief describes them. Codex ends
+   its answer with a `KEEP:` line that says which generation it kept for each name; co-codex
+   copies those under the names and every other image of the turn to `<folder>/_rejected/`.
+   It never overwrites a different file: a taken name becomes `name-2.png`.
+3. When it finishes, Read the files in the JSON `names` map, check each against the brief, and
+   give the user the paths with one line on what you checked. Say in one line that it used their
+   Codex quota. `namesMatchedBy` says how the names were matched:
+   - `keep-line`: from Codex's own `KEEP:` line; nothing more to match.
+   - `order`: no usable `KEEP:` line, but as many images as names. Check that each file shows
+     what its name says.
+   - `null`: the files kept their item ids. Match them by eye, as the warning on stderr says.
 4. Changes ("make it bluer", "without the text"): send them to the same session with the
    previous file attached:
-   `send img-<short-slug> "<change>" --ref <previous file> --images --wait --out <folder> --json`.
+   `send img-<short-slug> "<change>" --ref <previous file> --images --names <name> --wait --out <folder> --json`.
+
+The JSON gives each image's real `width` and `height`. gpt-image-2 chooses its own output size
+whatever the brief asks (seen: 1254x1254 for square and 1538x1022 for landscape). When exact
+pixels matter, resize or crop the copies afterwards with the project's own tools; co-codex has no
+image library and does not resize.
 5. If `doctor` or the command says Codex is missing or signed out, tell the user to install
    Codex (https://developers.openai.com/codex) and run `codex login`.
 
@@ -121,6 +136,26 @@ subagent), or for the user's decision.
 3. Claude and Codex share the working tree. Split the files clearly in the task, or spawn with
    `--cwd <path of a separate git worktree>`.
 
+## Choosing a sandbox
+
+The sandbox is fixed when a session starts; `send` cannot change it. To change it, spawn a new
+session. The spawn line and `--json` show the `sandbox` and whether it has `network` access.
+
+| Task | Sandbox |
+|---|---|
+| Image generation, questions | `--sandbox read-only` |
+| Code edits in this repo or a worktree | `workspace-write` (the default) |
+| Installs, builds that download, deploys, Codex Sites, anything online | `--network` (workspace-write with network), or `--sandbox danger-full-access` when the user allows it |
+
+- When the task contains a command such as `npm install`, `git push` or "deploy to" and the
+  session has no network, co-codex prints a warning (not for `--images` runs). It does not block;
+  decide whether to stop and spawn again.
+- Actions that share or publish, such as inviting people or making a site public, can need
+  approval, and a spawned session cannot ask for it. Plan for that before a deploy: tell the user
+  they may have to approve that step in `codex resume <name> -a on-request`.
+- co-codex cannot see which Codex features (such as Sites) an account has. A read-only question
+  session gives Codex's own claim about them, which is not verified.
+
 ## Choosing a tier
 
 | Tier | Model (first one this account offers) | Use it for |
@@ -152,16 +187,25 @@ For images also give the size or aspect, the background (say "real transparent b
 you need alpha), the style and the count, and attach references with `--ref <file>` (say which
 one is the edit target and which are style references only). Add `--images` so the tier's quality
 rules go into the message. For batches add `--subagents`: Codex then splits the work across its
-own subagents. Templates for game art, UI mockups and ad creatives: `references/image-briefs.md`.
+own subagents. `--names` does not work with `--subagents`, because each subagent numbers its
+images in its own thread. Templates for game art, UI mockups and ad creatives:
+`references/image-briefs.md`.
 
-## Running and waiting
+## Long tasks
 
-- For anything longer than a minute, run `spawn ... --wait` or `send ... --wait` with Bash
-  `run_in_background: true`. You are notified when it exits; stdout holds the answer.
+1. Run `spawn ... --wait --json` or `send ... --wait --json` with Bash `run_in_background: true`.
+   You are notified when it exits; stdout holds the answer.
+2. Exit 2 means `--timeout` passed while Codex keeps working: run `wait <name>` again, also in
+   the background.
+3. Sessions live on the Codex daemon, not in your process, so they survive you being restarted.
+   Find them with `list --all`, then `wait <name>` for a running turn, `read <name>` for the last
+   answer and `images <name> --out <folder>` for its images.
+
 - `send` without `--wait` prints the message id; `wait <session> --message <id>` picks that turn up
   later, even when it was queued behind other work.
 - `--out <dir>` copies the turn's images there and logs each in `co-codex-images.jsonl`.
-  `--json` returns the answer, model, image paths and limit status as one object.
+  `--json` returns the answer, model, sandbox, image paths and sizes, refused actions, limit
+  status and quota use (`usage`, the windows before and after the run) as one object.
 - Look at the images yourself (Read the PNG) before you report them as done.
 
 | Exit | Meaning | What to do |
@@ -170,21 +214,27 @@ own subagents. Templates for game art, UI mockups and ad creatives: `references/
 | 2 | timed out, Codex keeps working | run `wait <session>` again |
 | 3 | turn failed or was interrupted | read the error, fix the task, resend |
 | 4 | usage limit reached | tell the user the reset time from the message; resend the unfinished part after it |
+| 5 | answered, but some actions were refused because they need approval (only in sessions co-codex started; in a window a person holds the declines were theirs, so the exit is 0 with `declined` in the JSON) | tell the user which (`declined` in the JSON, `!` lines on stderr) and ask them to open `codex resume <name> -a on-request` and let Codex retry there, where they approve it. If the retry needs the network, they add `-c sandbox_workspace_write.network_access=true`, or `-s danger-full-access` only if they agree to it |
 | 1 | co-codex error | read the message; run `doctor` |
 
 ## Rules
 
 - Tell the user each time you send work to Codex. It runs on their ChatGPT plan and spends their
-  Codex quota; image generation spends it 3-5x faster than text. Run `limits` before a large batch.
-- A line starting with `!` means Codex waits for an approval. co-codex never approves; ask the
-  user to answer in the Codex window. Never try to approve on Codex's behalf.
-- Spawned sessions run in the `workspace-write` sandbox with approval prompts off, so blocked
-  commands go back to Codex instead of waiting. Use `--sandbox danger-full-access` only when the
-  user allows it or their config sets it; `--sandbox read-only` for a session that must not write.
+  Codex quota; image generation spends it 3-5x faster than text. Run `limits` before a large batch;
+  `limits --estimate <n> --tier <t>` gives the expected share for n images from past runs on this
+  machine.
+- A line starting with `!` means Codex waits for an approval, or lists actions it was refused for
+  lack of one. co-codex never approves; ask the user to answer in the Codex window. Never try to
+  approve on Codex's behalf.
+- Spawned sessions run with approval prompts off, so blocked commands go back to Codex instead of
+  waiting. Pick the sandbox from the table above. Use `--sandbox danger-full-access` only when
+  the user allows it or their config sets it.
 - Codex cannot message you on its own. If it needs something, it ends its turn with a question,
   which arrives as its answer. Reply with another `send`.
-- Remove throwaway sessions you spawned once the user no longer needs them:
-  `codex delete --force <session uuid>` (without a terminal, Codex needs `--force` and the UUID).
+- Clean up throwaway sessions once the user no longer needs them: `cleanup --name-prefix img-`
+  lists the ones co-codex started in this project that no window has open and nobody used for 2
+  days (`--older-than` changes that); add `--yes` to delete them. It never touches sessions
+  co-codex did not start, or ones a person has since used in a Codex window. Fallback for one session: `codex delete --force <session uuid>`.
 
 ## If it breaks
 

@@ -24,6 +24,11 @@ asking for "the smallest size" did not shrink the output. Earlier runs gave 1254
 and 1538x1022 for landscape images. So a cheaper tier saves agent tokens and retries, not
 image resolution.
 
+On any tier the output size does not follow the brief: a brief that asked for 1080x1080 got
+1254x1254. co-codex reads each PNG's real `width` and `height` and puts them in the JSON results
+and in `co-codex-images.jsonl`. When exact pixels matter, resize or crop the copies afterwards
+with the project's own tools.
+
 ## Cost, from OpenAI's pricing page
 
 Credits per 1M tokens at standard speed (https://learn.chatgpt.com/docs/pricing, read 2026-10-16):

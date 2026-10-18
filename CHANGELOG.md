@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.0 (2026-10-18)
+
+From a project that used 0.2.0 for about ten image batches and a deploy.
+
+- `spawn --network`: workspace-write with network access, for installs, deploys and anything online. Every spawn reports its `sandbox` and `network` (status line and `--json`), read from what Codex says it started. co-codex warns, without blocking, when a task contains a command such as `npm install`, `git push` or "deploy to" and the session has no network (never for `--images` runs, which are read-only by design). `send` now refuses `--sandbox` and `--network` instead of ignoring them, because Codex fixes the sandbox when a session starts.
+- `doctor` shows Codex's own sandbox settings for the project (`sandbox_mode`, `sandbox_workspace_write.network_access`, `approval_policy`) next to what co-codex spawns with.
+- Actions refused for lack of approval come back as data: `declined: [{type, action, reason}]` in `--json` (declined commands and file changes, and tool calls that failed with an approval message, subagents included). In a session co-codex started (approvals off) they also print a `!` block on stderr with the retry command, `codex resume <name> -a on-request`, and end with the new exit code 5; exit codes 4 and 3 still take precedence. In a window a person holds, the declines were theirs: a stderr note, `declined` in the JSON, exit code 0.
+- `--names a.png,b.png` on `spawn`, `send` and `wait`: Codex ends its answer with a `KEEP:` line and co-codex copies the kept images under the requested names, the others to `<out>/_rejected/`. Falls back to order when the count matches, else to item-id names, with a warning and `namesMatchedBy` in the JSON. Never overwrites a different file. Not with `--subagents`; images from subagents Codex starts on its own go to `_rejected/`.
+- Every image in the JSON results and in `co-codex-images.jsonl` has its real `width` and `height`, read from the PNG header. There is no `--resize`: it would need an image library, and co-codex has no dependencies.
+- `cleanup [--older-than 2d] [--name-prefix p] [--yes]`: lists, and with `--yes` deletes, sessions co-codex started in this project that no window has open. Dry run by default. Outside a git repository only sessions of that exact folder count, and a session whose last message a person typed is skipped ("used in a Codex window").
+- Quota per batch: runs with `--wait` report `usage` (the five-hour and weekly windows before and after). Completed `--images` runs are logged in `~/.config/co-codex/usage.jsonl` (`$XDG_CONFIG_HOME` respected), and `limits --estimate <n> [--tier t]` gives the share for n images as summed window use over summed images, since Codex reports whole percents.
+- SKILL.md: a sandbox table, one "Long tasks" recipe, `--names` in the image workflow, real output sizes, exit code 5 and `cleanup`.
+
 ## 0.2.0 (2026-10-16)
 
 - `opinion`: an independent, read-only second opinion from Codex on a plan, decision, design or text, with a structured verdict, ranked concerns, alternatives and questions; `--mode challenge` asks Codex to refute Claude's position; `--diff`, `--base` and `--commit` run Codex's built-in code reviewer. The skill runs it only on the user's request or a standing preference, always in addition to Claude's own review.

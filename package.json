@@ -1,6 +1,6 @@
 {
   "name": "co-codex",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Hand tasks to OpenAI Codex from Claude Code (or any agent), steer model and effort with quality tiers, and collect the images Codex generates",
   "type": "module",
   "license": "MIT",

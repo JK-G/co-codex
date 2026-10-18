@@ -11,9 +11,12 @@
 //   MOCK_CODEX_STATE        JSON file holding threads and turns (shared by every proxy process)
 //   MOCK_CODEX_DROP_METHOD  a method left out of the schema export (doctor must report it)
 //   MOCK_CODEX_SLOW_MS      length of a [[slow]] turn (default 3000)
+//   MOCK_CODEX_CONFIG_FAIL  config/read answers with an error
 //
 // Markers in the message text pick the turn's behaviour: [[image]], [[subagent]], [[limit]],
-// [[slow]], [[approval]]. A turn completes at its `dueAt` time: a timer in the proxy that started
+// [[slow]], [[approval]], [[declined]] (refused actions), [[images:N]] (N image generations),
+// [[fail:K]] (generation K fails), [[keep:a.png=1,b.png=3]] (a KEEP line ends the answer).
+// Each usable image adds 2% to the 5-hour window and 1% to the weekly one. A turn completes at its `dueAt` time: a timer in the proxy that started
 // it emits the events, and any later read completes overdue turns from the state file, so a turn
 // started by a CLI process that exited early still ends (deterministically) for the next one.
 import { createHash, randomUUID } from "node:crypto";
@@ -28,9 +31,9 @@ const SLOW_MS = Number(process.env.MOCK_CODEX_SLOW_MS) || 3000;
 const PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
 const METHODS = [
-  "initialize", "thread/loaded/list", "thread/read", "thread/list", "thread/start", "thread/name/set",
+  "initialize", "thread/loaded/list", "thread/read", "thread/list", "thread/start", "thread/name/set", "thread/delete",
   "thread/resume", "thread/settings/update", "thread/turns/list", "thread/queue/add", "thread/queue/list", "turn/start", "review/start",
-  "turn/interrupt", "model/list", "account/read", "account/rateLimits/read",
+  "turn/interrupt", "model/list", "account/read", "account/rateLimits/read", "config/read",
 ];
 const NOTIFICATIONS = ["item/started", "item/completed", "turn/started", "turn/completed", "thread/status/changed"];
 
@@ -98,12 +101,27 @@ const nowS = () => Math.floor(Date.now() / 1000);
 const textOf = input => (input ?? []).filter(i => i.type === "text").map(i => i.text).join("\n");
 const firstLine = input => textOf(input).replace(SIGNATURE, "").trim().split("\n")[0].trim();
 
-function writePng(s, name) {
+// The 1x1 PNG with its IHDR size changed and a tag after IEND, so every image is a different file.
+function png(width, height, tag) {
+  const b = Buffer.from(PNG_B64, "base64");
+  b.writeUInt32BE(width, 16);
+  b.writeUInt32BE(height, 20);
+  return Buffer.concat([b, Buffer.from(String(tag))]);
+}
+
+function writePng(s, name, width = 1254, height = 1254) {
   const dir = path.join(path.dirname(path.resolve(STATE)), "generated");
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `${name}.png`);
-  fs.writeFileSync(file, Buffer.from(PNG_B64, "base64"));
+  fs.writeFileSync(file, png(width, height, name));
   return file;
+}
+
+// Network access as Codex reports it: workspace-write gets it from the config override only.
+function sandboxPolicy(t) {
+  if (t.sandbox === "danger-full-access") return { type: "dangerFullAccess" };
+  if (t.sandbox === "read-only") return { type: "readOnly", networkAccess: false };
+  return { type: "workspaceWrite", writableRoots: [], networkAccess: !!t.network, excludeTmpdirEnvVar: false, excludeSlashTmp: false };
 }
 
 function threadStatus(t) {
@@ -143,21 +161,44 @@ function complete(s, thread, turn) {
     ...(turn.clientUserMessageId ? { clientId: turn.clientUserMessageId } : {}),
   }];
   turn.completedAt = nowS();
+  let made = 0;
   if (text.includes("[[image]]")) {
     const a = nextId(s, "item");
     items.push({ type: "imageGeneration", id: a, status: "completed", revisedPrompt: "a red dot", transparentBackground: false, savedPath: writePng(s, a), result: PNG_B64 });
-    items.push({ type: "imageGeneration", id: nextId(s, "item"), status: "completed", revisedPrompt: "a blue dot", transparentBackground: true, result: PNG_B64 });
+    const b = nextId(s, "item");
+    items.push({ type: "imageGeneration", id: b, status: "completed", revisedPrompt: "a blue dot", transparentBackground: true, result: png(1538, 1022, b).toString("base64") });
+    made += 2;
+  }
+  const count = Number(/\[\[images:(\d+)\]\]/.exec(text)?.[1] ?? 0);
+  const fails = new Set([...text.matchAll(/\[\[fail:(\d+)\]\]/g)].map(m => Number(m[1])));
+  for (let k = 1; k <= count; k++) {
+    const id = nextId(s, "item");
+    if (fails.has(k)) items.push({ type: "imageGeneration", id, status: "failed", revisedPrompt: `image ${k}`, transparentBackground: null, result: "", savedPath: null });
+    else { items.push({ type: "imageGeneration", id, status: "completed", revisedPrompt: `image ${k}`, transparentBackground: false, result: "", savedPath: writePng(s, id, 1000 + k, 500 + k) }); made++; }
+  }
+  if (text.includes("[[declined]]")) {
+    items.push({ type: "commandExecution", id: nextId(s, "item"), command: "npm publish", cwd: thread.cwd, status: "declined", exitCode: null, aggregatedOutput: null });
+    items.push({ type: "commandExecution", id: nextId(s, "item"), command: "npm test", cwd: thread.cwd, status: "completed", exitCode: 0, aggregatedOutput: "ok" });
+    items.push({ type: "fileChange", id: nextId(s, "item"), status: "declined", changes: [{ path: "site/index.html", kind: { type: "update" }, diff: "" }] });
+    items.push({ type: "mcpToolCall", id: nextId(s, "item"), server: "sites", tool: "invite_member", arguments: {}, status: "failed", error: { message: "user rejected the tool call: approval required" } });
+    items.push({ type: "mcpToolCall", id: nextId(s, "item"), server: "fs", tool: "read", arguments: {}, status: "failed", error: { message: "EACCES: permission denied, open 'x'" } });
   }
   if (text.includes("[[subagent]]")) {
     const child = newThread(s, { threadSource: "subagent", cwd: thread.cwd, name: null, loaded: true });
     const img = nextId(s, "item");
+    const childItems = [{ type: "imageGeneration", id: img, status: "completed", revisedPrompt: "subagent dot", transparentBackground: false, savedPath: writePng(s, img) }];
+    if (text.includes("[[declined]]")) childItems.push({ type: "commandExecution", id: nextId(s, "item"), command: "git push", cwd: thread.cwd, status: "declined", exitCode: null, aggregatedOutput: null });
     child.turns.unshift({
       id: nextId(s, "turn"), status: "completed", error: null, startedAt: turn.startedAt, completedAt: turn.completedAt,
       input: [{ type: "text", text: "draw" }],
-      items: [{ type: "imageGeneration", id: img, status: "completed", revisedPrompt: "subagent dot", transparentBackground: false, savedPath: writePng(s, img) }],
+      items: childItems,
     });
     items.push({ type: "subAgentActivity", id: nextId(s, "item"), kind: "started", agentThreadId: child.id });
+    made++;
   }
+  if (!text.includes("[[limit]]")) { s.usedFive = Math.min(99, (s.usedFive ?? 12) + 2 * made); s.usedWeek = Math.min(99, (s.usedWeek ?? 40) + made); }
+  const keep = /\[\[keep:([^\]]*)\]\]/.exec(text)?.[1];
+  const tail = keep ? `\nKEEP: ${keep.split(",").join(", ")}` : "";
   if (text.includes("[[limit]]")) {
     s.limitHit = true;
     turn.status = "failed";
@@ -179,7 +220,7 @@ function complete(s, thread, turn) {
     turn.status = "completed";
     turn.error = null;
   } else {
-    items.push({ type: "agentMessage", id: nextId(s, "item"), text: `echo: ${firstLine(turn.input)}` });
+    items.push({ type: "agentMessage", id: nextId(s, "item"), text: `echo: ${firstLine(turn.input)}${tail}` });
     turn.status = "completed";
     turn.error = null;
   }
@@ -223,21 +264,33 @@ const handlers = {
     if (p.searchTerm) list = list.filter(t => (t.name ?? "").includes(p.searchTerm) || publicThread(t).preview.includes(p.searchTerm));
     if (p.cwd) list = list.filter(t => samePath(t.cwd, p.cwd));
     list.sort((a, b) => b.order - a.order);
-    return { data: list.slice(0, p.limit ?? 25).map(publicThread), nextCursor: null };
+    // the real thread/list leaves threadSource out (seen live with Codex 0.162.1); thread/read has it
+    return { data: list.slice(0, p.limit ?? 25).map(t => ({ ...publicThread(t), threadSource: null })), nextCursor: null };
+  },
+  "thread/delete": (s, p) => {
+    getThread(s, p.threadId);
+    delete s.threads[p.threadId];
+    s.deleted = [...(s.deleted ?? []), p.threadId];
+    return {};
+  },
+  "config/read": () => {
+    if (process.env.MOCK_CODEX_CONFIG_FAIL) throw rpcError(-32603, "config unavailable");
+    return { config: { sandbox_mode: "danger-full-access", sandbox_workspace_write: { network_access: false }, approval_policy: "on-request" }, origins: {} };
   },
   "thread/start": (s, p) => {
     const t = newThread(s, {
       cwd: p.cwd ?? process.cwd(), threadSource: p.threadSource ?? "appServer", sandbox: p.sandbox ?? null,
       approvalPolicy: p.approvalPolicy ?? null, serviceTier: p.serviceTier ?? null, ...(p.model ? { model: p.model } : {}),
+      network: p.sandbox === "workspace-write" && p.config?.sandbox_workspace_write?.network_access === true, config: p.config ?? null,
     });
-    return { thread: publicThread(t), model: t.model, reasoningEffort: t.reasoningEffort, modelProvider: "openai", cwd: t.cwd, sandbox: t.sandbox, approvalPolicy: t.approvalPolicy };
+    return { thread: publicThread(t), model: t.model, reasoningEffort: t.reasoningEffort, modelProvider: "openai", cwd: t.cwd, sandbox: sandboxPolicy(t), approvalPolicy: t.approvalPolicy };
   },
   "thread/name/set": (s, p) => { getThread(s, p.threadId).name = p.name; return {}; },
   "thread/resume": (s, p) => {
     const t = getThread(s, p.threadId);
     if (!t.turns.length) throw rpcError(-32600, `no rollout found for thread id ${t.id}`);
     t.loaded = true;
-    return { thread: publicThread(t), model: t.model, reasoningEffort: t.reasoningEffort, modelProvider: "openai", cwd: t.cwd };
+    return { thread: publicThread(t), model: t.model, reasoningEffort: t.reasoningEffort, modelProvider: "openai", cwd: t.cwd, sandbox: sandboxPolicy(t) };
   },
   "thread/settings/update": (s, p) => {
     const t = getThread(s, p.threadId);
@@ -288,8 +341,8 @@ const handlers = {
     const reset = Math.floor(Date.UTC(2030, 0, 1, 12, 0) / 1000);
     const limits = {
       limitId: "codex", limitName: null, planType: "pro",
-      primary: { usedPercent: s.limitHit ? 100 : 12, windowDurationMins: 300, resetsAt: reset },
-      secondary: { usedPercent: 40, windowDurationMins: 10080, resetsAt: reset + 3 * 86400 },
+      primary: { usedPercent: s.limitHit ? 100 : s.usedFive ?? 12, windowDurationMins: 300, resetsAt: reset },
+      secondary: { usedPercent: s.usedWeek ?? 40, windowDurationMins: 10080, resetsAt: reset + 3 * 86400 },
       credits: null, rateLimitReachedType: s.limitHit ? "primary" : null,
     };
     return { rateLimits: limits, rateLimitsByLimitId: { codex: limits } };

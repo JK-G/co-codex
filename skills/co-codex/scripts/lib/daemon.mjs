@@ -6,7 +6,7 @@ import { randomBytes } from "node:crypto";
 import { endProcess, runCodex, startCodex } from "./codex-bin.mjs";
 
 const OP_TEXT = 0x1, OP_CONT = 0x0, OP_CLOSE = 0x8, OP_PING = 0x9, OP_PONG = 0xa;
-export const CLIENT_VERSION = "0.2.0";
+export const CLIENT_VERSION = "0.3.0";
 const REQUEST_TIMEOUT_MS = 120_000; // one reply; waiting for a whole turn is handled by the caller
 const UPGRADE_TIMEOUT_MS = 30_000;
 const daemonDown = err => /failed to connect|connection refused|no such file|os error/i.test(err.message);

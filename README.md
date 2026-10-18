@@ -12,8 +12,12 @@ Unofficial. Not affiliated with OpenAI or Anthropic.
 
 - `spawn` and `send` give Codex a task, in a new named session or in a window you have open. `--wait` blocks until Codex answers and prints the answer.
 - `--tier draft|standard|high|max` chooses the model and effort from the models your account offers: GPT-6 Luna for drafts, GPT-6.1 Sol for everyday and final work, GPT-6 Astra for the hardest jobs.
-- `images` lists or copies every image a turn produced, following subagent threads, and logs each file with its prompt in `co-codex-images.jsonl`.
-- `limits` shows how much of the five-hour and weekly windows you have used and when they reset. A turn that runs into the limit exits with code 4 and the reset time.
+- `images` lists or copies every image a turn produced, following subagent threads, and logs each file with its prompt and real pixel size in `co-codex-images.jsonl`.
+- `--names hero.png,icon.png` gives the copies the file names you asked for. Codex says which generation it kept for each name, and the retries go to `_rejected/`.
+- `--network` starts a session that can reach the network, for installs and deploys. co-codex reports each session's sandbox and warns when a task contains a command such as `npm install`, `git push` or "deploy to" and the session has no network. Image runs never get this warning.
+- In a session co-codex started, actions Codex was refused because they needed approval come back as data, with exit code 5, so Claude can tell you what to approve.
+- `limits` shows how much of the five-hour and weekly windows you have used and when they reset. A turn that runs into the limit exits with code 4 and the reset time. `limits --estimate 10` says what 10 images usually cost, from your past image runs.
+- `cleanup` lists, and with `--yes` deletes, old sessions co-codex started that nobody has open.
 - `opinion` asks Codex for an independent, read-only second opinion on a plan, a decision or a code change, in addition to Claude's own review.
 - `doctor` checks Codex, the daemon, your sign-in, the tier models, and every protocol method co-codex relies on.
 
@@ -162,14 +166,21 @@ On a small diff that changed a bill-splitting function to round every share, `op
 | `images <session> [--turns n] [--out dir]` | List or copy the images of recent turns, subagents included |
 | `opinion <text> [--on what] [--mode challenge] [--file path]` | Read-only second opinion on a plan, decision, design or text |
 | `opinion --diff \| --base <branch> \| --commit <sha>` | Codex's built-in code review of a change |
+| `cleanup [--older-than 2d] [--name-prefix p] [--yes]` | Old sessions co-codex started in this project that no window has open: listed, or deleted with `--yes` |
 | `models` | Models on your account and how each tier resolves |
-| `limits` | Usage of the current windows and reset times |
-| `doctor` | Check the setup and the protocol |
+| `limits [--estimate n] [--tier t]` | Usage of the current windows and reset times, or the expected share for n images |
+| `doctor` | Check the setup and the protocol, and show Codex's sandbox settings next to co-codex's |
 | `init [--write]` | Print the AGENTS.md note for Codex, or append it to `./AGENTS.md` |
 
-Options for `spawn` and `send`: `--tier`, `--model`, `--effort`, `--images`, `--subagents`, `--ref <image>` (repeatable), `--wait`, `--timeout <s>`, `--out <dir>`, `--json`. `spawn` also takes `--cwd`, `--sandbox` and `--fast`. `<session>` is a session id, an exact name, or `open` for the one Codex window open in the current project. Pass `-` as the task to read it from stdin.
+Options for `spawn` and `send`: `--tier`, `--model`, `--effort`, `--images`, `--subagents`, `--ref <image>` (repeatable), `--wait`, `--timeout <s>`, `--out <dir>`, `--names <list>`, `--json`. `spawn` also takes `--cwd`, `--sandbox`, `--network` and `--fast`; the sandbox is fixed per session, so `send` refuses `--sandbox` and `--network`. `wait` takes `--out` and `--names` too. `<session>` is a session id, an exact name, or `open` for the one Codex window open in the current project. Pass `-` as the task to read it from stdin.
 
-Exit codes: 0 answered, 1 co-codex error, 2 timed out (Codex keeps working, run `wait`), 3 turn failed or was interrupted, 4 usage limit reached.
+Exit codes: 0 answered, 1 co-codex error, 2 timed out (Codex keeps working, run `wait`), 3 turn failed or was interrupted, 4 usage limit reached, 5 answered, but some actions were refused because they need approval.
+
+## Named images, sizes and quota
+
+- `--names a.png,b.png` (with `--images` and `--out`) asks Codex to make the images in that order and to end its answer with a line such as `KEEP: a.png=1, b.png=3`: the position of the kept image among all generations of the turn, retries included. co-codex copies the kept images under those names and the others to `<out>/_rejected/`. Without a usable `KEEP:` line it maps the images in order when the count matches, and says so; otherwise it keeps the item-id names. It never overwrites a different file: a taken name becomes `a-2.png`. Not with `--subagents`, whose images are numbered in their own threads; images from subagents Codex starts on its own go to `_rejected/` too.
+- gpt-image-2 picks its own output size (seen: 1254x1254 square, 1538x1022 landscape), whatever the brief asks. Every image in the JSON results and the log carries its real `width` and `height`. co-codex has no image library, so it does not resize; use your project's tools when exact pixels matter.
+- Runs with `--wait` report `usage`: the five-hour and weekly windows before and after the turn. Each completed `--images` run adds a line to `~/.config/co-codex/usage.jsonl` (`$XDG_CONFIG_HOME` respected), and `limits --estimate <n>` divides the summed window use of those runs by their summed image count. The windows count whole percents, so one small run often reads 0; pooling the runs keeps the ones that moved the window. They also include any other Codex use at the same time, so treat the estimate as rough.
 
 ## Configuration
 
@@ -188,8 +199,11 @@ co-codex works without a config file. To change defaults, create `~/.config/co-c
 ## Safety and cost
 
 - Every task spends the Codex quota of your ChatGPT plan. The skill tells Claude to say so each time it sends work and to check `limits` before a batch.
-- Spawned sessions run in the `workspace-write` sandbox with approval prompts off: nobody watches them, so a blocked command goes back to Codex instead of waiting forever. Set `"sandbox": "danger-full-access"` in your config if you want spawned sessions to run without the sandbox.
-- co-codex never answers approval prompts. It prints a line starting with `!` and leaves the decision to the person at the Codex window.
+- Spawned sessions run in the `workspace-write` sandbox without network access and with approval prompts off: nobody watches them, so a blocked command goes back to Codex instead of waiting forever. `--network` adds network access for one session. Set `"sandbox": "danger-full-access"` in your config if you want spawned sessions to run without the sandbox.
+- Which sandbox for which task: `read-only` for images and questions, `workspace-write` for code edits, `--network` (or `danger-full-access` if you allow it) for installs, deploys and anything else online.
+- co-codex never answers approval prompts. It prints a line starting with `!` and leaves the decision to the person at the Codex window. When a spawned session was refused an action that needed approval (inviting someone to a site, for example), co-codex lists it and exits with code 5, so you can open `codex resume <name> -a on-request` and let Codex retry it there, approving each step. If the retry needs the network, add `-c sandbox_workspace_write.network_access=true` (or `-s danger-full-access`). In a window you hold, a decline was your own choice: co-codex reports it and exits 0.
+- `cleanup` only touches sessions co-codex started, in the current project, that no window has open, and deletes nothing without `--yes`.
+- co-codex cannot see which Codex features (such as Sites) your account has. Asking Codex in a read-only session gives its own claim, not a verified answer.
 - It refuses to send to one of your saved sessions that no window has open, because nobody could answer that session's prompts.
 - `init --write` appends a short note to `AGENTS.md`, and the skill asks before running it.
 
@@ -212,7 +226,7 @@ If you mainly want Codex to review code from inside Claude Code, look at OpenAI'
 
 ## Tests
 
-- `npm test` runs 64 unit and end-to-end tests against a mock Codex. CI runs them on Ubuntu, macOS and Windows with Node 20, 22 and 24.
+- `npm test` runs 91 unit and end-to-end tests against a mock Codex. CI runs them on Ubuntu, macOS and Windows with Node 20, 22 and 24.
 - `claude plugin eval . --no-publish` runs the trigger evals in `evals/`: 9 requests that must load the skill (image requests in English and Polish that never name Codex, a task for Codex, two requests for a second opinion) and 5 that must not (image-processing code, a question about images on a website, a plan review and a code review that do not mention Codex, a general question). On 2026-10-16 all 14 passed twice each with Claude Code 2.1.301. A full run cost about $4 of Claude usage.
 
 ## License

@@ -29,7 +29,20 @@
 | A new window's answer arrives late | A thread cannot be subscribed until it has had one turn ("no rollout found"); co-codex then reads the answer from the history every 5 s. |
 | Exit code 2 | `--timeout` (default 3600 s) passed. Codex keeps working; run `wait <session>`. |
 | Exit code 4 | Usage limit. The message names the reset time; `limits` shows all windows. |
-| `!` lines on stderr | Codex waits for an approval. Answer in the Codex window; co-codex never approves. |
+| Exit code 5 | Codex answered, but some actions needed an approval that nobody could give (sessions co-codex starts run with approval policy `never`). They are listed on stderr and in `--json` as `declined`. Open `codex resume <name> -a on-request` and let Codex retry there; you approve each action in that window. If the retry needs the network, add `-c sandbox_workspace_write.network_access=true`, or `-s danger-full-access` if you accept that. In a window you hold, declines are your own and co-codex exits 0. |
+| `!` lines on stderr | Codex waits for an approval, or (after a turn) lists the actions it was refused. Answer in the Codex window; co-codex never approves. |
+| Installs, deploys or downloads fail inside Codex | The session has no network access. `spawn` prints `network off` and warns when the task contains a command such as `npm install` or `git push`. The sandbox is fixed per session, so `send` cannot fix it: spawn a new session with `--network`, or with `--sandbox danger-full-access` if you allow it. `doctor` shows Codex's own sandbox settings next to co-codex's. |
+| `could not match names` or `mapped by order, check them` | `--names` found no usable `KEEP:` line in Codex's answer. With as many images as names, co-codex maps them in order (`namesMatchedBy: "order"`), so check each file. Otherwise it copies the images under their item ids (`namesMatchedBy: null`) and you name them yourself. |
+| `<name> already exists with other content` | `--names` never overwrites a different file; this image went to `<name>-2.png`. |
+
+## Cleaning up sessions
+
+`cleanup` lists the sessions co-codex started in this project that no window has open and that
+nobody used for 2 days (`--older-than 30m|12h|2d|1w`, `--name-prefix img-`). Nothing is deleted
+until you add `--yes`. Sessions you started yourself are never listed, and neither is a spawned session whose last message a person typed in a Codex window (shown as skipped). Outside a git repository only sessions of the current folder count, not its subfolders. A session co-codex used
+recently can stay loaded on the daemon for a while after co-codex exits; it counts as open and is
+listed once the daemon has unloaded it. For a single session, `codex delete --force <session uuid>`
+still works.
 
 ## After a Codex update
 
