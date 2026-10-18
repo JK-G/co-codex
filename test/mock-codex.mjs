@@ -12,6 +12,7 @@
 //   MOCK_CODEX_DROP_METHOD  a method left out of the schema export (doctor must report it)
 //   MOCK_CODEX_SLOW_MS      length of a [[slow]] turn (default 3000)
 //   MOCK_CODEX_CONFIG_FAIL  config/read answers with an error
+//   MOCK_CODEX_EARLY_MS     fire the turn timer this many ms early (a timer that fires before dueAt must re-arm)
 //
 // Markers in the message text pick the turn's behaviour: [[image]], [[subagent]], [[limit]],
 // [[slow]], [[approval]], [[declined]] (refused actions), [[images:N]] (N image generations),
@@ -369,12 +370,15 @@ function schedule(threadId, turn) {
       params: { threadId, turnId: turn.id, itemId: "cmd-1", command: "rm -rf build", reason: "needs approval" },
     }), Math.floor(delay / 2));
   }
-  setTimeout(() => {
+  const fire = () => {
     const s = load();
     settle(s);
     save(s);
     const done = s.threads[threadId]?.turns.find(t => t.id === turn.id);
-    if (!done || done.status === "inProgress" || emitted.has(done.id)) return;
+    // Node timers can fire a millisecond or so before Date.now() reaches dueAt (seen on Linux CI).
+    // Returning then would leave the turn running with no event ever sent, so the timer re-arms.
+    if (done?.status === "inProgress") return void setTimeout(fire, Math.max(1, done.dueAt - Date.now() + 1));
+    if (!done || emitted.has(done.id)) return;
     emitted.add(done.id);
     for (const item of done.items) {
       notify("item/started", { threadId, turnId: done.id, item });
@@ -382,7 +386,8 @@ function schedule(threadId, turn) {
     }
     notify("turn/completed", { threadId, turn: publicTurn(done) });
     notify("thread/status/changed", { threadId, status: { type: "idle" } });
-  }, delay);
+  };
+  setTimeout(fire, delay - (Number(process.env.MOCK_CODEX_EARLY_MS) || 0));
 }
 
 // ---------------------------------------------------------------- WebSocket on stdio

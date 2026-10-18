@@ -221,6 +221,18 @@ describe("co-codex CLI", { concurrency: 4 }, () => {
     assert.equal(th.model, "gpt-6-astra");
   });
 
+  test("a turn whose completion timer fires early still ends promptly (no 30 s poll gap)", async t => {
+    const { cli } = sandbox(t);
+    const env = { MOCK_CODEX_EARLY_MS: "80" };
+    const started = Date.now();
+    const r = await cli(["spawn", "hello", "--name", "e", "--wait"], { env });
+    ok(r);
+    assert.equal(r.stdout.trim(), "echo: hello");
+    const sent = await cli(["send", "e", "again", "--wait"], { env });
+    assert.equal(sent.stdout.trim(), "echo: again");
+    assert.ok(Date.now() - started < 15_000, `took ${Date.now() - started} ms`);
+  });
+
   test("spawn without --wait, then wait", async t => {
     const { cli } = sandbox(t);
     const s = await cli(["spawn", "later please", "--name", "x"]);

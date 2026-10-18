@@ -223,7 +223,15 @@ function localTime(unixS) {
 
 // Notifications are routed to whichever waiter is listening for that thread.
 const listeners = new Set();
-const onNotification = msg => { for (const l of listeners) l(msg); };
+// The last item and turn events, replayed to each new waiter: a reply and the events right after
+// it can arrive in one read, and those events are dispatched before the awaiting code goes on to
+// register its listener, so without this they were lost.
+const recent = [];
+const REPLAYED = /^(item\/(started|completed)|turn\/completed)$/;
+const onNotification = msg => {
+  if (REPLAYED.test(msg.method)) { recent.push(msg); if (recent.length > 500) recent.shift(); }
+  for (const l of listeners) l(msg);
+};
 const notedRequests = new Set();
 const onServerRequest = msg => {
   const key = `${msg.params?.threadId}:${msg.method}`;
@@ -315,6 +323,7 @@ function waitForTurn(rpc, threadId, { turnId = null, match = {}, timeoutS, subsc
   return new Promise((resolve, reject) => {
     let timer, poller, polling = false, settled = false, lastFlags = "";
     const seen = new Map(); // items reported by events, kept in case the history lags behind
+    const ended = new Map(); // turn/completed events by turn id, kept until a poll can use them
     const found = id => { turnId = id; state.turnId = id; };
     if (turnId) found(turnId);
     const finish = (fn, v) => {
@@ -323,15 +332,17 @@ function waitForTurn(rpc, threadId, { turnId = null, match = {}, timeoutS, subsc
       listeners.delete(listener); clearTimeout(timer); clearInterval(poller); fn(v);
     };
     const fullTurn = async (id, depth) => (await recentTurns(rpc, threadId, depth, "full")).find(t => t.id === id);
-    const poll = async ({ final } = {}) => {
+    const poll = async () => {
       if (polling || settled) return;
       polling = true;
+      let final = turnId ? ended.get(turnId) : undefined;
       try {
         const turns = await recentTurns(rpc, threadId, turnId ? 3 : RECENT, "summary");
         debug("poll", turns.map(t => `${t.id}:${t.status}`).join(" "), final ? `final:${final.status}` : "");
         const at = turns.findIndex(t => (turnId ? t.id === turnId : match.byTurn?.(t)));
         if (at >= 0) {
           found(turns[at].id);
+          final ??= ended.get(turnId);
           if (turns[at].status !== "inProgress") {
             // Seen live once: the summary view called a turn finished while the full view still had it running.
             const full = await fullTurn(turnId, at + 1);
@@ -355,15 +366,16 @@ function waitForTurn(rpc, threadId, { turnId = null, match = {}, timeoutS, subsc
         if (flags && flags !== lastFlags) console.error(`! Codex is ${flags}; it continues once that is answered in the Codex window.`);
         lastFlags = flags;
       }
-      if (msg.method !== "turn/completed") return;
-      if (!turnId) return void poll(); // the start event came before we listened
-      if (p.turn?.id !== turnId) return;
-      const items = [...seen.values()].filter(x => x.turnId === turnId).map(x => x.item);
-      const final = { ...p.turn, items: p.turn.items?.length ? p.turn.items : items };
-      const settle = () => (polling ? setTimeout(settle, 200) : poll({ final })); // let a running poll finish first
+      if (msg.method !== "turn/completed" || !p.turn?.id) return;
+      // Kept by id: when the turn is not identified yet (a queued message), the poll that finds it uses it.
+      const items = [...seen.values()].filter(x => x.turnId === p.turn.id).map(x => x.item);
+      ended.set(p.turn.id, { ...p.turn, items: p.turn.items?.length ? p.turn.items : items });
+      if (turnId && p.turn.id !== turnId) return;
+      const settle = () => { if (!settled) (polling ? setTimeout(settle, 200) : poll()); }; // let a running poll finish first
       settle();
     };
     listeners.add(listener);
+    for (const msg of [...recent]) listener(msg); // events that came before this listener existed
     rpc.closed.then(err => finish(reject, new BridgeError(`lost the Codex daemon (${err.message}); Codex may still be working, run wait again`)));
     poller = setInterval(poll, subscribed ? 30_000 : 5_000);
     poll();
