@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="166" height="40" viewBox="0 0 166 40" role="img" aria-label="Download ZIP">
+  <title>Download ZIP</title>
+  <rect x="0.5" y="0.5" width="165" height="39" rx="6" fill="#24292f" stroke="#57606a"/>
+  <g fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M25 11v12"/>
+    <path d="M20 18l5 5 5-5"/>
+    <path d="M18 28h14"/>
+  </g>
+  <text x="42" y="25.5" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="15" font-weight="600">Download ZIP</text>
+</svg>

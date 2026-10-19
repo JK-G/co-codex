@@ -2,9 +2,40 @@
 
 [![tests](https://github.com/JK-G/co-codex/actions/workflows/test.yml/badge.svg)](https://github.com/JK-G/co-codex/actions/workflows/test.yml)
 
-co-codex lets Claude Code give tasks to OpenAI Codex and read the answers. It can message the Codex window you already have open or start a new session. Four quality tiers pick the Codex model and reasoning effort for each task, and every image Codex generated comes back to you, including the ones its subagents made.
+## TL;DR
 
-It grew out of one job: generating game art with Codex's image tool while Claude Code wrote the briefs and put the results into the game. The same loop works for UI mockups, ad creatives, icons and illustrations, and for any coding task you would rather run on your Codex quota than on Claude's.
+Claude Code cannot make images. co-codex hands your image requests to OpenAI Codex on your ChatGPT plan and brings every image back into your project. It does the same for any other task you would rather run on your Codex quota than on Claude's.
+
+What the skill gives Claude Code:
+
+- Images from a plain request, in any wording, English or Polish. You do not have to mention Codex: Claude writes the brief, Codex generates the image with gpt-image-2, and the PNG lands in your project.
+- Four quality tiers (`draft`, `standard`, `high`, `max`) that pick the Codex model and reasoning effort for each task.
+- Every image a turn produced, including the ones Codex's subagents made, logged with its prompt and real pixel size.
+- A read-only second opinion from Codex on a plan, a decision or a code change, when you ask for it, in addition to Claude's own review.
+- Quota and reset times: `limits` shows how much of the five-hour and weekly windows you have used, and a turn that hits the limit stops with the reset time.
+
+You need the [Codex CLI](https://developers.openai.com/codex), signed in with a ChatGPT plan that includes Codex, and Node.js 20 or newer.
+
+**Install as a Claude Code plugin:**
+
+```
+/plugin marketplace add JK-G/co-codex
+/plugin install co-codex@co-codex
+```
+
+**Or as a plain skill:** download the ZIP, unpack it and copy the `co-codex-main/skills/co-codex` folder into `~/.claude/skills/`.
+
+[![Download ZIP](docs/download-zip.svg)](https://github.com/JK-G/co-codex/archive/refs/heads/main.zip)
+
+**For another agent, or to check your setup first:** `npx -y github:JK-G/co-codex doctor` runs the CLI without cloning.
+
+Then ask Claude Code: "generate an image of a red apple".
+
+![Pixel-art game assets: a forest camp at dusk, character portraits (a wolf, a panda, a hooded old man, a traveller and three undead), resource and prop icons, six poses of an ogre with a hammer, and spell effect icons.](docs/showcase-game-art.webp)
+
+Raw art for a 2D pixel-art game prototype: 300 image calls on 15-16 October 2026 on a ChatGPT Plus plan, 222 of them between one afternoon and the next morning. Claude Code wrote the briefs and Codex generated the images with gpt-image-2. co-codex grew out of this run: see [the case behind it](#the-case-behind-it-game-art-on-a-chatgpt-plus-plan).
+
+The same loop works for UI mockups, ad creatives, icons and illustrations.
 
 Unofficial. Not affiliated with OpenAI or Anthropic.
 
@@ -29,16 +60,11 @@ Unofficial. Not affiliated with OpenAI or Anthropic.
 
 ## Install
 
-As a Claude Code plugin:
+The short path is in the [TL;DR](#tldr). The other ways:
 
-```
-/plugin marketplace add JK-G/co-codex
-/plugin install co-codex@co-codex
-```
+From a shell instead of inside Claude Code: `claude plugin marketplace add JK-G/co-codex`, then `claude plugin install co-codex@co-codex`.
 
-The same from a shell: `claude plugin marketplace add JK-G/co-codex`, then `claude plugin install co-codex@co-codex`.
-
-As a plain skill, without the plugin system:
+As a plain skill with git, without the plugin system:
 
 ```
 git clone https://github.com/JK-G/co-codex
@@ -53,7 +79,7 @@ Then ask Claude Code to "run co-codex doctor", or run it yourself:
 node ~/.claude/skills/co-codex/scripts/co-codex.mjs doctor
 ```
 
-The CLI is a single Node script, so any agent that can run shell commands can use it. Only `SKILL.md` is specific to Claude Code. To run it without cloning: `npx -y github:JK-G/co-codex doctor`.
+The CLI is a single Node script, so any agent that can run shell commands can use it. Only `SKILL.md` is specific to Claude Code.
 
 ## Quick start
 
