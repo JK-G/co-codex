@@ -254,7 +254,7 @@ If you mainly want Codex to review code from inside Claude Code, look at OpenAI'
 ## Tests
 
 - `npm test` runs 92 unit and end-to-end tests against a mock Codex. CI runs them on Ubuntu, macOS and Windows with Node 20, 22 and 24.
-- `claude plugin eval . --no-publish` runs the trigger evals in `evals/`: 11 requests that must load the skill (image requests in English and Polish that never name Codex, a task for Codex, two requests for a second opinion, two new pages to build in HTML and CSS) and 6 that must not (image-processing code, a question about images on a website, a plan review and a code review that do not mention Codex, a general question, a small CSS fix). On 2026-10-16 the first 14 passed twice each with Claude Code 2.1.301; the three UI evals were added in 0.4.0 and have not been run yet. A full run cost about $4 of Claude usage.
+- `claude plugin eval . --no-publish` runs the trigger evals in `evals/`: 11 requests that must load the skill (image requests in English and Polish that never name Codex, a task for Codex, two requests for a second opinion, two new pages to build in HTML and CSS) and 6 that must not (image-processing code, a question about images on a website, a plan review and a code review that do not mention Codex, a general question, a small CSS fix). On 2026-10-16 the first 14 passed twice each with Claude Code 2.1.301, and on 2026-10-24 the three UI evals added in 0.4.0 passed twice each with Claude Code 2.1.310. A full run cost about $4 of Claude usage.
 
 ## License
 
