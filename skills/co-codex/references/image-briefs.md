@@ -57,7 +57,34 @@ Make <3> variants that differ in <layout of the hero | card style>. Save them as
 Done when: every label is spelled exactly as given and nothing is cut off at the edges.
 ```
 
-A mockup is a picture. Use it to pick a direction, then build the screen in code.
+A mockup is a picture. Use it to pick a direction, then build the screen in code. When to offer
+a mockup round before UI work, and how to use the result: "Mockups before UI code" in `SKILL.md`.
+
+### Wireframes
+
+```
+Make a low-fidelity wireframe of the <page> for <product>, <desktop 1440x900 | mobile 390x844>.
+Greyscale only: boxes, lines and real text. No photos, no brand colours, no decoration; grey
+boxes with a cross stand in for images.
+Sections, top to bottom: <hero with "<headline>" and a "<button label>" button>, <...>.
+Make <3> variants that differ in <section order | hero layout | navigation>.
+Save them as <path>/<name>-<n>.png.
+Done when: every section is present, every label is spelled exactly as given, nothing is cut off.
+```
+
+### Style directions
+
+```
+Make <3> visual directions for the <page> of <product>, one image each, <desktop 1440x900>.
+Each shows the hero and one content section in a different style: <1: ...>, <2: ...>, <3: ...>.
+Use the same content in all of them: "<headline>", "<button label>".
+In your answer, describe each direction in one line: type style, colours as hex, mood.
+Save them as <path>/<name>-<n>.png.
+Done when: the directions clearly differ from each other and the text is spelled exactly as given.
+```
+
+One image holds about one screen (seen up to 1538x1022), so for a long page ask for the hero and
+one or two sections, or one image per section, instead of the whole page in one picture.
 
 ### Ad creatives
 

@@ -1,6 +1,6 @@
 ---
 name: co-codex
-description: Generate images, and hand other work to OpenAI Codex. Claude cannot create images itself, so use this skill whenever the user asks for an image in any wording or language - generate, create, draw, make, design or edit an image, picture, photo, illustration, icon, logo, sprite, texture, mockup, banner, poster, thumbnail or ad creative (Polish - wygeneruj obraz, zrób grafikę, narysuj, stwórz obrazek, ikonę, logo, zdjęcie). Codex makes the image with gpt-image-2 on the user's ChatGPT plan and the files come back into the project. Also use it when the user asks to give a task to Codex, ask or check on Codex, or run work on their Codex quota instead of Claude's. It messages an open Codex window or starts a session, picks a quality tier (draft, standard, high, max) that sets the Codex model and effort, and collects every image, subagents included. When the user asks for it, or a standing preference of theirs says so, it also gets an independent second opinion from Codex on a plan, decision, design or code diff, in addition to Claude's own review and never instead of it.
+description: Generate images, and hand other work to OpenAI Codex. Claude cannot create images itself, so use this skill whenever the user asks for an image in any wording or language - generate, create, draw, make, design or edit an image, picture, photo, illustration, icon, logo, sprite, texture, mockup, banner, poster, thumbnail or ad creative (Polish - wygeneruj obraz, zrób grafikę, narysuj, stwórz obrazek, ikonę, logo, zdjęcie). Codex makes the image with gpt-image-2 on the user's ChatGPT plan and the files come back into the project. Also use it when the user asks to give a task to Codex, ask or check on Codex, or run work on their Codex quota instead of Claude's. Also use it before you code a new web page, landing page, app screen or visible redesign: it says when to ask the user whether Codex should first draw wireframes, mockups or style directions to pick from. It messages an open Codex window or starts a session, picks a quality tier (draft, standard, high, max) that sets the Codex model and effort, and collects every image, subagents included. When the user asks for it, or a standing preference of theirs says so, it also gets an independent second opinion from Codex on a plan, decision, design or code diff, in addition to Claude's own review and never instead of it.
 ---
 
 # co-codex
@@ -72,6 +72,67 @@ pixels matter, resize or crop the copies afterwards with the project's own tools
 image library and does not resize.
 5. If `doctor` or the command says Codex is missing or signed out, tell the user to install
    Codex (https://developers.openai.com/codex) and run `codex login`.
+
+## Mockups before UI code (ask first)
+
+Before you build a new web page, landing page, app screen or visible redesign in HTML and CSS
+(or React, Astro, Tailwind, a CMS theme), you can offer a round of Codex mockups. Picking from
+three pictures takes minutes; recoding a finished page in a direction nobody wanted takes longer.
+
+**When to ask**
+
+- Before the first line of UI code, when the layout or the look is still open: no design file,
+  screenshot or design system that already settles it.
+- Once per page or screen, in one short question with two answers (mockups first, or straight
+  to code) that names the cost: a few minutes and some of their Codex quota. For example: "Before
+  I code this, should Codex draw 3 versions of the hero and pricing section so you can pick one?
+  It takes a few minutes and uses your Codex quota."
+- Not for small changes (copy, a bug, spacing, one colour), not when the user gave a design to
+  copy or said to go straight to code, and not again after they declined in this conversation.
+- Ask from the main conversation. A subagent cannot ask the user, so ask before you hand the UI
+  work to one.
+- A standing preference decides without asking: when CLAUDE.md, project instructions or memory
+  say to always run a mockup round for this kind of work, run it and say in one line which
+  preference you followed; when they say never, skip it. The second time the user says yes on
+  similar work, offer once to save it as a standing preference, and save it only after a yes.
+- A direct request ("make wireframes first", "zrób najpierw makiety") needs no question: run it.
+
+**What to make**
+
+| Still open | Make | Brief template (`references/image-briefs.md`) |
+|---|---|---|
+| The visual direction, with no references yet | 3-4 style directions | Style directions |
+| The structure: sections, order, hierarchy | low-fidelity greyscale wireframes | Wireframes |
+| The look of a settled structure | high-fidelity mockups | UI and UX mockups |
+
+**How**
+
+1. Write the brief with the real content: headings and button labels in quotes, brand colours as
+   hex, the viewport (desktop 1440x900, mobile 390x844) and the one thing the variants differ in
+   (hero layout, section order, density, style). When the page already exists, attach a
+   screenshot with `--ref` as a layout reference.
+2. Run 2-4 variants on `draft` in a read-only session, with Bash `run_in_background: true`:
+
+   ```
+   node "${CLAUDE_SKILL_DIR}/scripts/co-codex.mjs" spawn - --name ui-<page-slug> --tier draft --images --names <page-slug>-1.png,<page-slug>-2.png,<page-slug>-3.png --sandbox read-only --wait --out <folder> --json < brief.md
+   ```
+
+   Folder: the project's design or mockups folder, else `./mockups/<page-slug>`. Never a folder
+   that gets deployed, such as `public/`, `static/` or `dist/`.
+3. Read every PNG, give the user the paths with one line per variant on how it differs, and ask
+   which one to build or what to combine. For changes, `send ui-<page-slug> "<change>" --ref
+   <chosen file> ...` on the same session. Use `standard` or `high` only when the mockup itself
+   will be shown to someone.
+4. Build the chosen variant in code. When the page is done, `cleanup --name-prefix ui-` lists
+   the mockup sessions to delete.
+
+**Using the mockup**
+
+- It sets the direction, not the spec. Build with the project's design system, semantic HTML and
+  accessible contrast.
+- Take copy and hex values from the brief, not from the picture. Text in generated images can be
+  misspelled, and colours drift.
+- Never put a mockup into the page as an image, and never ship the mockup files.
 
 ## Second opinion from Codex (optional, always in addition)
 

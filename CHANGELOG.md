@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0 (2026-10-24)
+
+- SKILL.md: "Mockups before UI code". Before Claude codes a new web page, landing page, app screen or visible redesign, it can ask the user once whether Codex should first draw 2-4 variants on `draft` (style directions, greyscale wireframes or high-fidelity mockups, by what is still open). It does not ask for small changes, when a design is given, after a no, or from a subagent; a standing preference in CLAUDE.md or memory decides without asking. The mockup sets the direction, never the spec, and is never shipped. The skill description now names this case, so the skill loads before UI work.
+- `references/image-briefs.md`: templates for wireframes and style directions, and a note that one image holds about one screen.
+- Trigger evals for the new case: two UI builds that must load the skill (English and Polish) and a CSS fix that must not.
+
 ## 0.3.0 (2026-10-18)
 
 From a project that used 0.2.0 for about ten image batches and a deploy.

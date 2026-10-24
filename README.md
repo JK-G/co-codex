@@ -12,6 +12,7 @@ What the skill gives Claude Code:
 - Four quality tiers (`draft`, `standard`, `high`, `max`) that pick the Codex model and reasoning effort for each task.
 - Every image a turn produced, including the ones Codex's subagents made, logged with its prompt and real pixel size.
 - A read-only second opinion from Codex on a plan, a decision or a code change, when you ask for it, in addition to Claude's own review.
+- Mockups before UI code: before Claude builds a new page or screen, it can ask whether Codex should first draw wireframes, mockups or style directions, so you pick a direction from pictures instead of from a finished page.
 - Quota and reset times: `limits` shows how much of the five-hour and weekly windows you have used, and a turn that hits the limit stops with the reset time.
 
 You need the [Codex CLI](https://developers.openai.com/codex), signed in with a ChatGPT plan that includes Codex, and Node.js 20 or newer.
@@ -253,7 +254,7 @@ If you mainly want Codex to review code from inside Claude Code, look at OpenAI'
 ## Tests
 
 - `npm test` runs 92 unit and end-to-end tests against a mock Codex. CI runs them on Ubuntu, macOS and Windows with Node 20, 22 and 24.
-- `claude plugin eval . --no-publish` runs the trigger evals in `evals/`: 9 requests that must load the skill (image requests in English and Polish that never name Codex, a task for Codex, two requests for a second opinion) and 5 that must not (image-processing code, a question about images on a website, a plan review and a code review that do not mention Codex, a general question). On 2026-10-16 all 14 passed twice each with Claude Code 2.1.301. A full run cost about $4 of Claude usage.
+- `claude plugin eval . --no-publish` runs the trigger evals in `evals/`: 11 requests that must load the skill (image requests in English and Polish that never name Codex, a task for Codex, two requests for a second opinion, two new pages to build in HTML and CSS) and 6 that must not (image-processing code, a question about images on a website, a plan review and a code review that do not mention Codex, a general question, a small CSS fix). On 2026-10-16 the first 14 passed twice each with Claude Code 2.1.301; the three UI evals were added in 0.4.0 and have not been run yet. A full run cost about $4 of Claude usage.
 
 ## License
 
