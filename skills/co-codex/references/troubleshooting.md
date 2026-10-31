@@ -27,13 +27,17 @@
 | `stays on <model> because the message has not started yet` | `send --tier --wait` timed out while the message was still queued. Switching back then would run it on the old model, so the session keeps the tier model; switch it back later with `send ... --model <old> --keep` or `/model` in the window. |
 | Requests hang | Every daemon request gives up after 120 s and the connection after 30 s, with a message naming the method. |
 | A new window's answer arrives late | A thread cannot be subscribed until it has had one turn ("no rollout found"); co-codex then reads the answer from the history every 5 s. |
-| Exit code 2 | `--timeout` (default 3600 s) passed. Codex keeps working; run `wait <session>`. |
-| Exit code 4 | Usage limit. The message names the reset time; `limits` shows all windows. |
+| `was not loaded on the daemon` or `could not load ... again` | A session co-codex started that nothing held any more, typically after a restart. When reloading it or its next turn fails (seen: "Bad Request"), spawn a new session and attach the last image you kept with `--ref`. A failed turn's images keep their item ids. |
+| `the sandbox is fixed when a session starts` | `send` got a `--sandbox` or `--network` other than the session's own (repeating the same one is fine). Spawn a new session for another sandbox. |
+| Exit code 2 | `--timeout` (default 3600 s) passed. Codex keeps working; run `wait <session>`. In Claude Code's foreground Bash, which stops a command after 10 minutes, pass `--timeout 540`. |
+| Exit code 4 | Usage limit, or a window above `--max-used` / `maxUsedPercent` (then nothing was sent). The message names the reset time; `limits` shows all windows. |
+| A script runs an old co-codex after an update | It names a plugin-cache path with a version in it. Call the launcher instead (`doctor` prints its path). `doctor` also says when a newer co-codex is out. |
 | Exit code 5 | Codex answered, but some actions needed an approval that nobody could give (sessions co-codex starts run with approval policy `never`). They are listed on stderr and in `--json` as `declined`. Open `codex resume <name> -a on-request` and let Codex retry there; you approve each action in that window. If the retry needs the network, add `-c sandbox_workspace_write.network_access=true`, or `-s danger-full-access` if you accept that. In a window you hold, declines are your own and co-codex exits 0. |
 | `!` lines on stderr | Codex waits for an approval, or (after a turn) lists the actions it was refused. Answer in the Codex window; co-codex never approves. |
 | Installs, deploys or downloads fail inside Codex | The session has no network access. `spawn` prints `network off` and warns when the task contains a command such as `npm install` or `git push`. The sandbox is fixed per session, so `send` cannot fix it: spawn a new session with `--network`, or with `--sandbox danger-full-access` if you allow it. `doctor` shows Codex's own sandbox settings next to co-codex's. |
 | `could not match names` or `mapped by order, check them` | `--names` found no usable `KEEP:` line in Codex's answer. With as many images as names, co-codex maps them in order (`namesMatchedBy: "order"`), so check each file. Otherwise it copies the images under their item ids (`namesMatchedBy: null`) and you name them yourself. |
-| `<name> already exists with other content` | `--names` never overwrites a different file; this image went to `<name>-2.png`. |
+| `<name> already exists with other content` | `--names` never overwrites a different file; this image went to `<name>-2.png`. On a correction turn, pass `--replace`: the name gets the new image and the old file moves to `_rejected/<name>-replaced.png`. |
+| `limits --estimate` says the runs were logged before co-codex recorded start times | Runs logged by 0.4.0 or older recorded only how far each run moved the window, so parallel runs counted each other's use and the estimate can be several times too high. Runs from 0.5.0 on record their start and are measured together where they overlap; once there are any, the older ones are left out. |
 
 ## Cleaning up sessions
 
@@ -70,3 +74,5 @@ still works.
 | `CO_CODEX_CONFIG` | Path of the user config file |
 | `XDG_CONFIG_HOME` | Base folder of the user config (default `~/.config`) |
 | `CO_CODEX_DEBUG` | Set to `1` to log daemon events and history polls on stderr |
+| `CO_CODEX_UPDATE_URL` | Where `doctor` reads the newest version (default: `package.json` on GitHub's main branch); `off` skips the check |
+| `CLAUDE_CONFIG_DIR` | Claude Code's folder (default `~/.claude`), where `doctor` and the launcher find the installed plugin |

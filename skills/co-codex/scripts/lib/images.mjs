@@ -1,7 +1,7 @@
 // Finds the images a Codex turn generated, including those made by its subagents, and copies
 // them out. Each imageGeneration item names its own file (savedPath, usually
 // ~/.codex/generated_images/<thread>/<item>.png), so nothing guesses by "newest file".
-import { appendFileSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { walkTurn } from "./turns.mjs";
 
@@ -142,11 +142,24 @@ function freeName(dir, name, img) {
   }
 }
 
+// --replace: the file holding a requested name moves to outDir/_rejected/<name>-replaced.png
+// (-replaced-2, ...), so the name gets the new image and the old one is kept.
+function moveAside(outDir, file) {
+  const dir = path.join(outDir, "_rejected");
+  mkdirSync(dir, { recursive: true });
+  const ext = path.extname(file), base = path.basename(file, ext);
+  for (let n = 1; ; n++) {
+    const to = path.join(dir, `${base}-replaced${n === 1 ? "" : `-${n}`}${ext}`);
+    if (!existsSync(to)) { renameSync(file, to); return to; }
+  }
+}
+
 // Copies images into outDir and appends one line per new file to outDir/co-codex-images.jsonl
 // (source, prompt, size, requested name), so a batch keeps its record. Without a plan every
 // usable image is copied as <item id>.png. With a plan (planNames) the kept images get their
-// names, never overwriting a different file, and the others go to outDir/_rejected/<item id>.png.
-export function copyImages(images, outDir, plan = null) {
+// names, never overwriting a different file (with replace, the different file moves to _rejected
+// first), and the others go to outDir/_rejected/<item id>.png.
+export function copyImages(images, outDir, plan = null, { replace = false } = {}) {
   mkdirSync(outDir, { recursive: true });
   const byId = img => `${img.itemId}${img.savedPath ? path.extname(img.savedPath) || ".png" : ".png"}`;
   const jobs = plan?.matchedBy
@@ -157,15 +170,16 @@ export function copyImages(images, outDir, plan = null) {
   for (const { img, dir, name, requested, rejected } of jobs) {
     if (img.savedPath && !existsSync(img.savedPath)) continue;
     mkdirSync(dir, { recursive: true });
-    let file = path.join(dir, name), fresh = true;
+    let file = path.join(dir, name), fresh = true, previous = null;
     if (requested) {
+      if (replace && existsSync(file) && !sameImage(file, img)) previous = moveAside(outDir, file);
       const free = freeName(dir, name, img);
       file = free.file;
       fresh = !free.same;
     } else if (existsSync(file) && (!img.savedPath || statSync(file).size === statSync(img.savedPath).size)) {
       fresh = false; // item ids are unique, so a file of that name is the same image
     }
-    copied.push({ ...img, file, data: undefined, fresh, name: requested, renamed: !!requested && path.basename(file) !== requested, rejected });
+    copied.push({ ...img, file, data: undefined, fresh, name: requested, renamed: !!requested && path.basename(file) !== requested, rejected, previous });
     if (!fresh) continue;
     if (img.savedPath) copyFileSync(img.savedPath, file);
     else writeFileSync(file, Buffer.from(img.data, "base64"));
@@ -173,6 +187,7 @@ export function copyImages(images, outDir, plan = null) {
       file: path.relative(outDir, file).split(path.sep).join("/"),
       name: requested,
       ...(rejected ? { rejected: true } : {}),
+      ...(previous ? { previous: path.relative(outDir, previous).split(path.sep).join("/") } : {}),
       source: img.savedPath,
       threadId: img.threadId,
       turnId: img.turnId,

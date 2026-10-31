@@ -46,6 +46,28 @@ base sheet as the edit target and change one thing (outfit, colour, weapon). In 
 behind this skill, redressing a finished base sheet kept all eight figures in place. Single bad
 frames still happen in long sheets, so check every cell.
 
+### Pixel art
+
+Seen over a week of pixel-art sprite sheets in one project:
+
+- **Size in words does not hold; an anchor does.** Codex ignores "22 pixels tall", but keeps the size
+  and place of figures that are already on the image it redraws. A new character takes two turns:
+  one sheet for the design, then a redraw on an anchor sheet that has rough figures at the target
+  size and place (Image 1, edit target), with the first sheet as the design reference (Image 2).
+- **"Make it smaller" shrinks the blocks, not the figure.** A correction turn asking for a smaller
+  figure came back with 4 px blocks instead of fewer 8 px ones. Ask for a redraw on an anchor instead.
+- **The grid drifts.** Blocks asked for at 8 px come out 7-9 px and drift across a figure, and the
+  canvas itself changes size: a square brief of 1024 px came back at 1254 px, which makes the pitch
+  8 x 1254 / 1024 = 9.8. Collapse to game pixels on a grid fitted to each figure's colour edges,
+  never a fixed grid, and never resample by a non-integer factor (lines double or vanish).
+- **Faces get finer blocks** (about 6 px against 8 elsewhere), and a leg can come out a column wider.
+  Check eyes and legs first, at the same scale as Codex's original.
+- **Edits of a finished sheet keep every figure in place** ("change only the head", "only the held
+  items"), so variants can be combined frame by frame: two edits gave four looks.
+- **Measure the results yourself.** Codex's own pass or fail on exact sizes, palette and block size
+  is too strict: it failed six sheets that were all good after the grid fit. When you post-process
+  anyway, pass `--retries 0` or `1`, so the tier does not redo images that are fine.
+
 ### UI and UX mockups
 
 ```
@@ -83,8 +105,9 @@ Save them as <path>/<name>-<n>.png.
 Done when: the directions clearly differ from each other and the text is spelled exactly as given.
 ```
 
-One image holds about one screen (seen up to 1538x1022), so for a long page ask for the hero and
-one or two sections, or one image per section, instead of the whole page in one picture.
+One image holds about one screen (most landscape images come back at 1536x1024), so for a long page
+ask for the hero and one or two sections, or one image per section, instead of the whole page in one
+picture.
 
 ### Ad creatives
 
@@ -108,11 +131,14 @@ rest of the set (on `standard`, with `--subagents`). One icon per image keeps ed
   Each subagent works on its own files; only the main Codex agent edits shared files such as logs
   or indexes, from their reports.
 - A long sequential session fills its context: one art session in the run behind this skill reached
-  390k of its 475k tokens. Subagents, or a fresh `spawn` per batch, avoid that.
+  390k of its 475k tokens. Subagents, or a fresh `spawn` per batch, avoid that. `context` in the
+  `--json` result says how full the session is.
 - On a Plus plan, about 78 image calls in roughly an hour used up the five-hour limit in that run.
-  Run `limits` before a batch. If a turn ends with exit code 4, co-codex prints the reset time;
-  `images <session> --out <dir>` still collects whatever was finished, and you resend the rest
-  after the reset.
+  Run `limits` before a batch, and pass `--max-used <pct>` when the user set a ceiling. If a turn
+  ends with exit code 4, co-codex prints the reset time; `images <session> --out <dir>` still
+  collects whatever was finished, and you resend the rest after the reset.
+- Corrections go to the same session with `--replace`, so the file keeps its name and the earlier
+  version moves to `_rejected/`, instead of piling up `name-2.png`, `name-3.png`.
 - For batches larger than the plan allows, OpenAI suggests setting `OPENAI_API_KEY`, so image
   calls are billed at API prices instead of the plan's limits
   (https://learn.chatgpt.com/docs/image-generation).

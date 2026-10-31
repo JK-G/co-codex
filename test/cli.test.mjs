@@ -26,7 +26,9 @@ function sandbox(t) {
     CO_CODEX_BIN: JSON.stringify([process.execPath, MOCK]),
     CO_CODEX_CONFIG: path.join(dir, "no-user-config.json"),
     MOCK_CODEX_STATE: state,
-    XDG_CONFIG_HOME: path.join(dir, "xdg"), // usage.jsonl lands in <dir>/xdg/co-codex
+    XDG_CONFIG_HOME: path.join(dir, "xdg"), // usage.jsonl and the launcher land in <dir>/xdg/co-codex
+    CLAUDE_CONFIG_DIR: path.join(dir, "claude"), // no installed plugin unless a test writes one
+    CO_CODEX_UPDATE_URL: "off", // doctor never goes online in tests
   });
   t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
 
@@ -656,18 +658,27 @@ test("opinion: fresh read-only session on the high tier, verdict rendered", asyn
     assert.match(sent.stderr, /the task mentions git push/);
   });
 
-  test("send cannot change the sandbox of a session", async t => {
+  test("send cannot change the sandbox of a session, but may repeat it", async t => {
     const { cli, thread } = sandbox(t);
     ok(await cli(["spawn", "hi", "--name", "x", "--wait"]));
-    for (const flags of [["--sandbox", "danger-full-access"], ["--network"]]) {
+    for (const flags of [["--sandbox", "danger-full-access"], ["--sandbox", "read-only"], ["--network"]]) {
       const r = await cli(["send", "x", "retry", "--wait", ...flags]);
-      assert.equal(r.code, 1);
-      assert.match(r.stderr, /the sandbox is fixed when a session starts, so send cannot change it; spawn a new session/);
+      assert.equal(r.code, 1, flags.join(" "));
+      assert.match(r.stderr, /the sandbox is fixed when a session starts, so send cannot change it \(this session: workspace-write, network off\); spawn a new session/);
     }
     assert.equal(thread("x").turns.length, 1);
     const out = json(await cli(["send", "x", "more", "--wait", "--json"]));
     assert.equal(out.sandbox, "workspace-write");
     assert.equal(out.network, false);
+    // the spawn's own flags repeated on a correction turn
+    ok(await cli(["send", "x", "again", "--wait", "--sandbox", "workspace-write"]));
+    ok(await cli(["spawn", "hi", "--name", "ro", "--sandbox", "read-only", "--wait"]));
+    ok(await cli(["send", "ro", "fix it", "--wait", "--sandbox", "read-only"]));
+    ok(await cli(["spawn", "hi", "--name", "net", "--network", "--wait"]));
+    ok(await cli(["send", "net", "deploy again", "--wait", "--network"]));
+    const bad = await cli(["send", "x", "more", "--sandbox", "wide-open"]);
+    assert.equal(bad.code, 1);
+    assert.match(bad.stderr, /--sandbox must be one of/);
   });
 
   test("doctor shows Codex's sandbox settings next to co-codex's; a failing config/read is a note", async t => {
@@ -931,6 +942,8 @@ test("opinion: fresh read-only session on the high tier, verdict rendered", asyn
     assert.equal(log[0].fiveHourDelta, 4);
     assert.equal(log[0].weeklyDelta, 2);
     assert.match(log[0].date, /^\d{4}-\d\d-\d\dT/);
+    assert.ok(Date.parse(log[0].start) <= Date.parse(log[0].date));
+    assert.deepEqual(log[0].fiveHour, { before: 12, after: 16 });
 
     const est = await cli(["limits", "--estimate", "10"]);
     ok(est);
@@ -941,7 +954,13 @@ test("opinion: fresh read-only session on the high tier, verdict rendered", asyn
     assert.deepEqual(e.fiveHour, { percent: 10, used: true });
     assert.equal(e.runs, 1);
     // whole-percent readings: most small runs read 0, so the runs are pooled, not averaged per run
-    const zero = tier => JSON.stringify({ date: "2026-10-18T00:00:00Z", tier, images: 1, fiveHourDelta: 0, weeklyDelta: 0 }) + "\n";
+    let minute = 0; // separate, non-overlapping runs
+    const zero = tier => {
+      const at = m => `2026-10-18T00:${String(m).padStart(2, "0")}:00Z`;
+      minute += 2;
+      return JSON.stringify({ start: at(minute), date: at(minute + 1), tier, images: 1, fiveHourDelta: 0, weeklyDelta: 0,
+        fiveHour: { before: 5, after: 5 }, weekly: { before: 5, after: 5 } }) + "\n";
+    };
     fs.appendFileSync(logFile, zero("draft") + zero("draft") + zero("draft"));
     const pooled = await cli(["limits", "--estimate", "1", "--tier", "draft"]);
     assert.match(pooled.stdout, /1 image\(s\) on the draft tier: about 1% of the 5-hour window and less than 1% of the weekly window, from 4 past run\(s\)/);
@@ -957,6 +976,160 @@ test("opinion: fresh read-only session on the high tier, verdict rendered", asyn
     const lines = fs.readFileSync(logFile, "utf8").trim().split("\n").length;
     assert.equal((await cli(["spawn", "[[limit]] [[image]] too many", "--name", "l", "--images", "--wait"])).code, 4);
     assert.equal(fs.readFileSync(logFile, "utf8").trim().split("\n").length, lines);
+  });
+
+  test("--max-used sends nothing when a window is fuller than allowed; config maxUsedPercent does the same", async t => {
+    const { cli, proj, thread } = sandbox(t);
+    const r = await cli(["spawn", "hi", "--name", "g", "--wait", "--max-used", "10"]);
+    assert.equal(r.code, 4, r.stderr);
+    assert.match(r.stderr, /not sent: the 5-hour window is 12% used \(resets \d{4}-\d\d-\d\d \d\d:\d\d\) and the weekly window is 40% used \(resets [^)]+\), above --max-used 10%\. Send it after the reset/);
+    assert.equal(thread("g"), undefined);
+    const weekly = await cli(["spawn", "hi", "--name", "g", "--wait", "--max-used", "30"]);
+    assert.equal(weekly.code, 4);
+    assert.match(weekly.stderr, /not sent: the weekly window is 40% used/);
+    ok(await cli(["spawn", "hi", "--name", "g", "--wait", "--max-used", "40"])); // 40% used is not above 40
+    const send = await cli(["send", "g", "more", "--wait", "--max-used", "5"]);
+    assert.equal(send.code, 4);
+    assert.equal(thread("g").turns.length, 1);
+    assert.equal((await cli(["opinion", "plan", "--max-used", "5"])).code, 4);
+    fs.writeFileSync(path.join(proj, ".co-codex.json"), JSON.stringify({ maxUsedPercent: 20 }));
+    const cfg = await cli(["send", "g", "more", "--wait"]);
+    assert.equal(cfg.code, 4);
+    assert.match(cfg.stderr, /the weekly window is 40% used .*above --max-used 20%/);
+    ok(await cli(["send", "g", "more", "--wait", "--max-used", "90"])); // the flag wins over the config
+    const bad = await cli(["spawn", "hi", "--name", "b", "--max-used", "lots"]);
+    assert.equal(bad.code, 1);
+    assert.match(bad.stderr, /--max-used \(maxUsedPercent\) must be a number from 0 to 100/);
+  });
+
+  test("--retries replaces the tier's regeneration rule and needs --images; no regenerating for pixel sizes", async t => {
+    const { cli, thread } = sandbox(t);
+    ok(await cli(["spawn", "[[image]] dots", "--name", "r0", "--tier", "high", "--images", "--retries", "0", "--wait"]));
+    const sent = thread("r0").turns[0].input[0].text;
+    assert.match(sent, /regenerate failures up to 2 times/); // the tier's rule stays...
+    assert.match(sent, /Regeneration: make one attempt per image and do not regenerate; .*This replaces any regeneration rule above\./); // ...and is overridden after it
+    assert.match(sent, /do not regenerate an image only because its pixel size differs from the brief/);
+    ok(await cli(["spawn", "[[image]] dots", "--name", "r1", "--images", "--retries", "1", "--wait"]));
+    assert.match(thread("r1").turns[0].input[0].text, /regenerate an image at most 1 time, and only when it clearly misses the brief/);
+    for (const [flags, message] of [
+      [["--retries", "1"], /--retries needs --images/],
+      [["--images", "--retries", "4"], /--retries must be 0, 1, 2 or 3/],
+      [["--images", "--retries", "one"], /--retries must be 0, 1, 2 or 3/],
+    ]) {
+      const e = await cli(["spawn", "x", "--name", "bad", ...flags]);
+      assert.equal(e.code, 1, flags.join(" "));
+      assert.match(e.stderr, message);
+    }
+  });
+
+  test("--replace gives a taken name to the new image and moves the old file to _rejected", async t => {
+    const { cli, dir } = sandbox(t);
+    const outDir = path.join(dir, "out");
+    fs.mkdirSync(outDir);
+    fs.writeFileSync(path.join(outDir, "a.png"), "the first try");
+    const r = await cli(["spawn", "[[images:1]] [[keep:a.png=1]] redo", "--name", "rp", "--images", "--names", "a.png", "--replace", "--wait", "--out", outDir, "--json"]);
+    const out = json(r);
+    assert.equal(out.names["a.png"], path.join(outDir, "a.png"));
+    const moved = path.join(outDir, "_rejected", "a-replaced.png");
+    assert.equal(fs.readFileSync(moved, "utf8"), "the first try");
+    assert.deepEqual(out.replaced, [{ name: "a.png", file: path.join(outDir, "a.png"), previous: moved }]);
+    assert.match(r.stderr, /a\.png held another image; moved it to _rejected[\\/]a-replaced\.png/);
+    const log = fs.readFileSync(path.join(outDir, "co-codex-images.jsonl"), "utf8").trim().split("\n").map(l => JSON.parse(l));
+    assert.equal(log[0].previous, "_rejected/a-replaced.png");
+    // collecting the same turn again changes nothing
+    const again = json(await cli(["wait", "rp", "--out", outDir, "--names", "a.png", "--replace", "--json"]));
+    assert.deepEqual(again.replaced, []);
+    assert.ok(!fs.existsSync(path.join(outDir, "_rejected", "a-replaced-2.png")));
+    // a second correction keeps both earlier versions
+    ok(await cli(["send", "rp", "[[images:1]] [[keep:a.png=1]] once more", "--images", "--names", "a.png", "--replace", "--wait", "--out", outDir]));
+    assert.ok(fs.existsSync(path.join(outDir, "_rejected", "a-replaced-2.png")));
+    const e = await cli(["spawn", "x", "--name", "bad", "--images", "--replace"]);
+    assert.equal(e.code, 1);
+    assert.match(e.stderr, /--replace needs --names/);
+  });
+
+  test("--json output is plain ASCII, so a reader with a legacy code page parses it", async t => {
+    const { cli } = sandbox(t);
+    const r = await cli(["spawn", "1024×1024 icon, café", "--name", "a", "--wait", "--json"]);
+    ok(r);
+    assert.match(r.stdout, /^[\x00-\x7f]*$/);
+    assert.match(r.stdout, /1024\\u00d71024 icon, caf\\u00e9/);
+    assert.equal(JSON.parse(r.stdout).answer, "echo: 1024×1024 icon, café");
+  });
+
+  test("a failed turn: no KEEP warning, images under item ids, and a hint when the session had to be reloaded", async t => {
+    const { cli, dir, seed, doneTurn } = sandbox(t);
+    const outDir = path.join(dir, "out");
+    seed([{ name: "old", threadSource: "co-codex", loaded: false, turns: [doneTurn("turn-old", "first", "done")] }]);
+    const r = await cli(["send", "old", "[[images:2]] [[error]] after a restart", "--images", "--names", "x,y", "--wait", "--out", outDir, "--json"]);
+    assert.equal(r.code, 3, r.stderr);
+    assert.doesNotMatch(r.stderr, /KEEP line/);
+    assert.match(r.stderr, /the turn ended as "failed", so its 2 image\(s\) were not matched to --names; copied under their item ids/);
+    assert.match(r.stderr, /"old" was not loaded on the daemon \(for example after a restart\) .*spawn a new one and attach the last image you kept with --ref/);
+    assert.match(r.stderr, /ended as "failed": Bad Request/);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.names, null);
+    assert.equal(out.copied.length, 2);
+    // a session that was loaded all along gets no such hint
+    const live = await cli(["spawn", "[[error]] boom", "--name", "live", "--wait"]);
+    assert.equal(live.code, 3);
+    assert.doesNotMatch(live.stderr, /was not loaded/);
+  });
+
+  test("--json reports how full the session's context is; a nearly full one gets a note", async t => {
+    const { cli } = sandbox(t);
+    const out = json(await cli(["spawn", "hi", "--name", "c", "--wait", "--json"]));
+    assert.deepEqual(out.context, { tokens: 12000, window: 475000, percent: 3, totalTokens: 24000 });
+    const full = await cli(["spawn", "[[context:400000]] long session", "--name", "c2", "--wait"]);
+    ok(full);
+    assert.match(full.stderr, /c2 has filled 84% of its context \(400000 of 475000 tokens\); spawn a fresh session for the next batch/);
+  });
+
+  test("the launcher at a fixed path runs the installed plugin, else the copy that wrote it", async t => {
+    const { cli, dir, proj } = sandbox(t);
+    ok(await cli(["list"]));
+    const launcher = path.join(dir, "xdg", "co-codex", "bin", "co-codex.mjs");
+    assert.ok(fs.existsSync(launcher));
+    const run = () => spawnSync(process.execPath, [launcher, "help"], {
+      cwd: proj, encoding: "utf8", windowsHide: true, env: { ...process.env, CLAUDE_CONFIG_DIR: path.join(dir, "claude") },
+    });
+    const own = run();
+    assert.equal(own.status, 0, own.stderr);
+    assert.match(own.stdout, /^Usage:/);
+    // a plugin Claude Code installed wins
+    const install = path.join(dir, "cache", "co-codex", "9.9.9");
+    const script = path.join(install, "skills", "co-codex", "scripts", "co-codex.mjs");
+    fs.mkdirSync(path.dirname(script), { recursive: true });
+    fs.writeFileSync(script, 'console.log("installed copy", process.argv.slice(2).join(" "));\n');
+    fs.mkdirSync(path.join(dir, "claude", "plugins"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "claude", "plugins", "installed_plugins.json"), JSON.stringify({
+      version: 2, plugins: { "co-codex@co-codex": [{ scope: "user", installPath: install, version: "9.9.9", lastUpdated: "2026-10-30T00:00:00Z" }] },
+    }));
+    const installed = run();
+    assert.equal(installed.status, 0, installed.stderr);
+    assert.equal(installed.stdout.trim(), "installed copy help");
+  });
+
+  test("doctor names this version, an installed plugin of another version, the launcher and a newer release", async t => {
+    const { cli, dir } = sandbox(t);
+    const version = JSON.parse(fs.readFileSync(path.join(HERE, "..", "package.json"), "utf8")).version;
+    const plain = await cli(["doctor"]);
+    ok(plain);
+    assert.equal(/co-codex\s+(\S+) \(/.exec(plain.stdout)?.[1], version);
+    assert.match(plain.stdout, /launcher\s+node ".*co-codex\.mjs" <command>/);
+    assert.doesNotMatch(plain.stdout, /^(ok)?\s+update\s/m); // CO_CODEX_UPDATE_URL=off
+    const install = path.join(dir, "cache", "0.1.0");
+    fs.mkdirSync(path.join(install, "skills", "co-codex", "scripts"), { recursive: true });
+    fs.writeFileSync(path.join(install, "skills", "co-codex", "scripts", "co-codex.mjs"), "");
+    fs.mkdirSync(path.join(dir, "claude", "plugins"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "claude", "plugins", "installed_plugins.json"), JSON.stringify({ plugins: { "co-codex@co-codex": [{ installPath: install, version: "0.1.0" }] } }));
+    const latest = v => ({ env: { CO_CODEX_UPDATE_URL: "data:application/json," + encodeURIComponent(JSON.stringify({ version: v })) } });
+    const old = await cli(["doctor"], latest("99.0.0"));
+    ok(old);
+    assert.match(old.stdout, new RegExp(`plugin\\s+Claude Code has co-codex 0\\.1\\.0 installed .*; this copy is ${version.replace(/\./g, "\\.")}`));
+    assert.match(old.stdout, /update\s+co-codex 99\.0\.0 is out, you have 0\.1\.0/);
+    assert.match((await cli(["doctor"], latest("0.1.0"))).stdout, /ok\s+update\s+0\.1\.0 is the newest version/);
+    assert.match((await cli(["doctor"], { env: { CO_CODEX_UPDATE_URL: "http://127.0.0.1:9/package.json" } })).stdout, /update\s+not checked:/);
   });
 });
 

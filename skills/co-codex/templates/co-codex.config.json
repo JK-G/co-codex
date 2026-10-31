@@ -1,6 +1,7 @@
 {
   "signature": "[Claude Code → Codex]",
   "defaultTier": null,
+  "maxUsedPercent": null,
   "spawn": {
     "sandbox": "workspace-write",
     "approvalPolicy": "never"

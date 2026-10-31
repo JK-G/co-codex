@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.0 (2026-10-31)
+
+From a project that used 0.3.0 for a week of game-art batches (about 120 image runs, most of them started in parallel by workflow subagents).
+
+- Quota estimate: parallel runs counted each other's use, because each logged run recorded only how far the window moved between its start and its end (22 overlapping runs once logged 189 points while the window moved at most 34). Each run now also records its start time and both readings, and `limits --estimate` measures overlapping runs together: the window from the first run's start to the last run's end, shared by all their images. A merged group that mixes tiers counts only for the all-tier estimate. Runs logged before 0.5.0 are left out once newer ones exist; until then the estimate says it may be too high.
+- `--max-used <pct>` on `spawn`, `send` and `opinion`, or `maxUsedPercent` in the config: co-codex sends nothing while the 5-hour or weekly window is above that share, and exits 4 with the reset time.
+- `--retries <0-3>` with `--images` replaces the tier's regeneration rule for one run, for callers that measure and fix the images themselves. Every image run now tells Codex not to regenerate an image only because its pixel size differs from the brief.
+- `--replace` with `--names` (on `spawn`, `send` and `wait`): a name that holds a different file gets the new image, and the old file moves to `<out>/_rejected/<name>-replaced.png` (logged as `previous`), instead of the new image becoming `<name>-2.png`.
+- `send` accepts a `--sandbox` or `--network` equal to the session's own, so a correction turn can repeat the spawn's flags; a different one is still refused, now naming the session's sandbox.
+- A turn that failed or was cut off no longer prints the `KEEP:` warning: its images keep their item ids. A session co-codex had to load again (after a restart) gets a hint when its turn or the reload fails: spawn a new one with the last kept image as `--ref`.
+- `--json` output is ASCII-escaped (`×` for ×), so readers that decode stdout with a legacy code page, such as Python's default on Windows, parse it.
+- `--json` results carry `context`: the session's tokens against its context window, from Codex's `thread/tokenUsage/updated`. Above 75% a status line says to start a fresh session.
+- A launcher at `~/.config/co-codex/bin/co-codex.mjs` (`$XDG_CONFIG_HOME` respected), written on every run, runs the version Claude Code has installed from a path that stays the same across updates. Subagents and saved workflow scripts call it instead of a plugin-cache path with a version in it.
+- `doctor` shows this copy's version, the installed plugin's when it differs, the launcher's path, and whether a newer co-codex is on GitHub (`CO_CODEX_UPDATE_URL=off` skips that check).
+- Docs: `references/subagent-brief.md` to paste into subagent and workflow prompts; pixel-art lessons in `references/image-briefs.md`; current output sizes (1536x1024 for most landscape images); `--timeout 540` for foreground runs in Claude Code; chains of batches with `--ref` and `--max-used` instead of a queue; one name prefix and a `cleanup` per batch; `draft` for exploration boards.
+
 ## 0.4.0 (2026-10-24)
 
 - SKILL.md: "Mockups before UI code". Before Claude codes a new web page, landing page, app screen or visible redesign, it can ask the user once whether Codex should first draw 2-4 variants on `draft` (style directions, greyscale wireframes or high-fidelity mockups, by what is still open). It does not ask for small changes, when a design is given, after a no, or from a subagent; a standing preference in CLAUDE.md or memory decides without asking. The mockup sets the direction, never the spec, and is never shipped. The skill description now names this case, so the skill loads before UI work.

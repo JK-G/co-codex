@@ -14,7 +14,8 @@ import { connect } from "./lib/daemon.mjs";
 import { collectImages, copyImages, imagesOf, limitFailure, namesNote, parseNames, planNames, usableImages } from "./lib/images.mjs";
 import { SANDBOXES, networkConfig, networkHints, sandboxOf } from "./lib/sandbox.mjs";
 import { declinedActions, walkTurn } from "./lib/turns.mjs";
-import { estimate, logRun, readWindows, usageReport } from "./lib/usage.mjs";
+import { ensureLauncher, installedPlugins, latestVersion, newer, ownVersion } from "./lib/install.mjs";
+import { estimate, logRun, readWindows, usageReport, windowsDetail } from "./lib/usage.mjs";
 
 const USAGE = `Usage: node <skill dir>/scripts/co-codex.mjs <command> [options]
 
@@ -24,7 +25,7 @@ Sessions
                                       Start a new named session and give it the task
   send <session> <text|-> [run options] [--keep]
                                       Queue a message; it runs after Codex's current turn, if any
-  wait <session> [--message <id>] [--out <dir>] [--names <list>] [--json]
+  wait <session> [--message <id>] [--out <dir>] [--names <list>] [--replace] [--json]
                                       Wait for a turn and print its answer: the turn of --message
                                       (the id send prints), else the last queued message, else the latest turn
   read <session> [--turns <n>]        Print the last answers (default 1)
@@ -43,7 +44,7 @@ Second opinion (read-only, in addition to your own review)
                                       questions. challenge: the text carries your position, Codex attacks it
   opinion --diff | --base <branch> | --commit <sha> [--tier <name>]
                                       Codex's built-in code reviewer on uncommitted changes, a branch or a commit
-                                      (default tier for opinions: high; --name, --cwd, --timeout, --json work too)
+                                      (default tier for opinions: high; --name, --cwd, --timeout, --max-used, --json work too)
 
 Account and setup
   models                              Models this account offers and what each tier resolves to
@@ -64,6 +65,11 @@ Run options (spawn, send)
   --out <dir>        with --wait: copy the turn's images there and log them in co-codex-images.jsonl
   --names <list>     with --images and --out: a.png,b.png,... Codex reports which image it kept for
                      each name; those are copied under the names, the other images to <out>/_rejected
+  --replace          with --names: a name that holds a different file gets the new image; the old file
+                     moves to <out>/_rejected/<name>-replaced.png (without it the new one is <name>-2.png)
+  --retries <n>      with --images: regenerate an image at most n times (0-3), whatever the tier says
+  --max-used <pct>   send nothing when the 5-hour or weekly window is above pct% used (exit 4 with the
+                     reset time); config: maxUsedPercent
   --json             print a machine-readable result
 
   <session>  a session id, an exact session name, or "open" (the one Codex window open in this project).
@@ -71,23 +77,28 @@ Run options (spawn, send)
              \`codex resume <name>\` first, so someone can answer their approval prompts.
   <text|->   the message; "-" reads it from stdin
   --sandbox  danger-full-access | workspace-write | read-only (default from config: workspace-write).
-             Fixed when the session starts; send cannot change it
+             Fixed when the session starts: send accepts only the session's own sandbox
   --network  spawn in workspace-write with network access (installs, deploys, anything online)
   --keep     send with --tier/--model/--effort: leave the session on that model afterwards. Without
              --keep, send needs --wait and switches the session back once its turn has started
 
+Launcher: node <config dir>/co-codex/bin/co-codex.mjs <command> runs the co-codex Claude Code has
+installed, from a path that stays the same when the plugin updates (doctor prints it)
+
 Exit codes: 0 done, 1 error, 2 timed out (Codex keeps working; run wait), 3 turn failed or was
-interrupted, 4 usage limit reached (the message says when it resets), 5 answered, but a session co-codex
-started was refused actions that need approval (listed on stderr and in --json "declined")`;
+interrupted, 4 usage limit reached, or --max-used sent nothing (the message says when it resets),
+5 answered, but a session co-codex started was refused actions that need approval (listed on stderr
+and in --json "declined")`;
 
 const SOURCE = "co-codex";
 const ALL_SOURCES = ["cli", "vscode", "exec", "appServer", "unknown"]; // thread/list defaults to interactive ones only
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const SKILL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const FLAGS = new Set(["wait", "all", "json", "images", "subagents", "fast", "write", "keep", "diff", "network", "yes"]);
+const SELF = fileURLToPath(import.meta.url);
+const SKILL_DIR = path.resolve(path.dirname(SELF), "..");
+const FLAGS = new Set(["wait", "all", "json", "images", "subagents", "fast", "write", "keep", "diff", "network", "yes", "replace"]);
 const VALUES = new Set([
   "name", "tier", "model", "effort", "timeout", "out", "cwd", "sandbox", "turns", "turn", "message", "ref", "on", "mode", "file", "base", "commit",
-  "names", "older-than", "name-prefix", "estimate",
+  "names", "older-than", "name-prefix", "estimate", "max-used", "retries",
 ]);
 const REPEATABLE = new Set(["ref", "file"]);
 // How many positional arguments each command takes, so a stray word is an error instead of the message.
@@ -103,9 +114,16 @@ const SUBAGENTS_NOTE =
   "Split this work across your subagents (for example one per image or per group of related images) and run them " +
   "in parallel. Give each subagent its own files; only you edit shared files such as logs or indexes, from their reports.";
 // Codex does not see where its image tool saves files; co-codex collects them from the turn itself.
+// The image tool picks its own output size, so regenerating to hit exact pixels only spends quota.
 const IMAGES_NOTE =
   "You do not need to report where generated images are stored; they are collected from this turn automatically. " +
-  "If the task asks you to save images to files, end your answer with those file paths.";
+  "If the task asks you to save images to files, end your answer with those file paths. " +
+  "The image tool picks its own output size: do not regenerate an image only because its pixel size differs from the brief; " +
+  "it is resized afterwards.";
+// --retries: replaces the tier's regeneration rule, for callers that check and fix the images themselves.
+const retriesNote = n => n === 0
+  ? "Regeneration: make one attempt per image and do not regenerate; the images are checked after this turn. This replaces any regeneration rule above."
+  : `Regeneration: regenerate an image at most ${n} time${n === 1 ? "" : "s"}, and only when it clearly misses the brief. This replaces any regeneration rule above.`;
 
 const OPINION_MODES = ["independent", "challenge"];
 // The final message of an opinion turn is constrained to this shape (strict: every key required).
@@ -137,6 +155,10 @@ const OPINION_SCHEMA = {
     questions: { type: "array", items: { type: "string" } },
   },
 };
+
+// ASCII only (\u00d7 for the multiplication sign): a reader that decodes stdout with a legacy code
+// page, such as Python's default on Windows, still parses it.
+const printJson = value => console.log(JSON.stringify(value, null, 2).replace(/[\u007f-\uffff]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`));
 
 const debug = (...args) => { if (process.env.CO_CODEX_DEBUG) console.error("[co-codex debug]", ...args); };
 
@@ -228,7 +250,10 @@ const listeners = new Set();
 // register its listener, so without this they were lost.
 const recent = [];
 const REPLAYED = /^(item\/(started|completed)|turn\/completed)$/;
+// The last thread/tokenUsage/updated of each thread: how full its context is, for --json.
+const tokenUsage = new Map();
 const onNotification = msg => {
+  if (msg.method === "thread/tokenUsage/updated" && msg.params?.threadId) tokenUsage.set(msg.params.threadId, msg.params.tokenUsage ?? null);
   if (REPLAYED.test(msg.method)) { recent.push(msg); if (recent.length > 500) recent.shift(); }
   for (const l of listeners) l(msg);
 };
@@ -403,6 +428,7 @@ async function chooseRun(rpc, config, opt) {
 function compose(config, text, run, opt) {
   const parts = [config.signature, text.trim()];
   if (opt.images) parts.push(`Image quality${run.tier ? ` (${run.tier} tier)` : ""}: ${run.imageNote} ${IMAGES_NOTE}`.replace(/\s+$/, ""));
+  if (run.retries != null) parts.push(retriesNote(run.retries));
   if (run.names) parts.push(namesNote(run.names));
   if (opt.subagents) parts.push(SUBAGENTS_NOTE);
   return parts.filter(Boolean).join("\n\n");
@@ -416,6 +442,35 @@ function namesOption(opt, cmd) {
   if (cmd !== "wait" && !opt.images) throw new BridgeError("--names needs --images");
   if (!opt.out) throw new BridgeError("--names needs --out <dir>, the folder the named files go to");
   try { return parseNames(opt.names); } catch (err) { throw new BridgeError(err.message); }
+}
+
+// --replace only means something for named copies; --retries only for image runs.
+function copyOptions(opt) {
+  if (opt.replace && opt.names === undefined) throw new BridgeError("--replace needs --names: it gives a taken name to the new image");
+}
+function retriesOption(opt) {
+  if (opt.retries === undefined) return null;
+  if (!opt.images) throw new BridgeError("--retries needs --images");
+  const n = Number(opt.retries);
+  if (!Number.isInteger(n) || n < 0 || n > 3) throw new BridgeError("--retries must be 0, 1, 2 or 3");
+  return n;
+}
+
+// --max-used (or maxUsedPercent in the config): checked before anything reaches Codex, so a run
+// never starts when a quota window is fuller than the caller allows. Exit 4, like a usage limit.
+async function quotaGuard(rpc, config, opt) {
+  const raw = opt["max-used"] ?? config.maxUsedPercent ?? null;
+  if (raw == null) return;
+  const max = Number(raw);
+  if (!Number.isFinite(max) || max < 0 || max > 100) throw new BridgeError("--max-used (maxUsedPercent) must be a number from 0 to 100");
+  let reply;
+  try { reply = await rpc.request("account/rateLimits/read", { excludeResetCreditDetails: true }); }
+  catch (err) { return console.error(`co-codex: warning: could not read the quota windows (${err.message}), so --max-used ${max} was not checked`); }
+  const windows = windowsDetail(reply);
+  const full = [["5-hour window", windows.fiveHour], ["weekly window", windows.weekly]].filter(([, w]) => w?.usedPercent != null && w.usedPercent > max);
+  if (!full.length) return;
+  throw new BridgeError(`not sent: the ${full.map(([label, w]) => `${label} is ${w.usedPercent}% used (resets ${localTime(w.resetsAt)})`).join(" and the ")}, ` +
+    `above --max-used ${max}%. Send it after the reset, or raise --max-used if the user agrees.`, 4);
 }
 
 // The sandbox is fixed per session; a task that sounds like it goes online gets a warning (never
@@ -457,6 +512,16 @@ async function usageLimit(rpc, turn, images) {
 
 const sizeOf = i => (i.width && i.height ? `${i.width}x${i.height}` : null);
 
+// How full a session's context is, from the last thread/tokenUsage/updated Codex sent during this
+// run: the tokens of its latest request against the model's context window. Null without one.
+const CONTEXT_WARN = 75;
+function contextOf(usage) {
+  const tokens = usage?.last?.totalTokens;
+  if (tokens == null) return null;
+  const window = usage.modelContextWindow ?? null;
+  return { tokens, window, percent: window ? Math.round((tokens / window) * 100) : null, totalTokens: usage.total?.totalTokens ?? null };
+}
+
 // Prints a finished turn (answer on stdout, or JSON) and turns its outcome into the exit code.
 async function report(rpc, run, turn, opt) {
   const entries = await walkTurn(rpc, run.threadId, turn).catch(err => {
@@ -466,22 +531,31 @@ async function report(rpc, run, turn, opt) {
   const images = imagesOf(entries);
   const kept = usableImages(images);
   const answer = finalAnswer(turn.items ?? []);
-  const plan = run.names && opt.out ? planNames(images.filter(i => i.threadId === run.threadId), run.names, answer) : null;
+  const completed = turn.status === "completed";
+  // A turn that failed or was cut off has no final KEEP line to read, so its images keep their item ids.
+  const plan = run.names && opt.out && completed ? planNames(images.filter(i => i.threadId === run.threadId), run.names, answer) : null;
   if (plan?.warning) console.error(`co-codex: warning: ${plan.warning}`);
+  if (run.names && opt.out && !completed && kept.length) console.error(`co-codex: the turn ended as "${turn.status}", so its ${kept.length} image(s) were not matched to --names; copied under their item ids`);
   // Codex can start subagents on its own; their images are not in its count, so they are kept aside.
   if (plan?.matchedBy) plan.rejected.push(...usableImages(images.filter(i => i.threadId !== run.threadId)));
-  const copied = opt.out ? copyImages(images, path.resolve(opt.out), plan) : [];
+  const copied = opt.out ? copyImages(images, path.resolve(opt.out), plan, { replace: !!opt.replace }) : [];
   for (const c of copied.filter(c => c.renamed)) console.error(`co-codex: ${c.name} already exists with other content; saved this image as ${path.basename(c.file)}`);
+  for (const c of copied.filter(c => c.previous)) console.error(`co-codex: ${c.name} held another image; moved it to ${path.relative(path.resolve(opt.out), c.previous)}`);
   const finals = copied.filter(c => !c.rejected), rejected = copied.filter(c => c.rejected);
   const declined = declinedActions(entries);
   const limit = await usageLimit(rpc, turn, images);
+  if (!completed && !limit && run.reloaded) {
+    console.error(`co-codex: "${run.name ?? run.threadId}" was not loaded on the daemon (for example after a restart) and its turn ended as "${turn.status}". ` +
+      "If a resend fails the same way, the session cannot continue: spawn a new one and attach the last image you kept with --ref.");
+  }
   const usage = usageReport(run.before, await readWindows(rpc));
-  if (opt.images && run.before && turn.status === "completed") { // a failed or cut-off run would skew the estimate
+  const context = contextOf(tokenUsage.get(run.threadId));
+  if (opt.images && run.before && completed) { // a failed or cut-off run would skew the estimate
     try { logRun(usage, { ...run, images: kept.length }); }
     catch (err) { console.error(`co-codex: could not log the quota use of this run: ${err.message}`); }
   }
   if (opt.json) {
-    console.log(JSON.stringify({
+    printJson({
       threadId: run.threadId, name: run.name ?? null, turnId: turn.id, status: turn.status,
       tier: run.tier ?? null, model: run.model ?? null, effort: run.effort ?? null,
       sandbox: run.sandbox ?? null, network: run.network ?? null,
@@ -490,11 +564,13 @@ async function report(rpc, run, turn, opt) {
       copied: finals.map(c => c.file),
       names: plan ? Object.fromEntries(finals.filter(c => c.name).map(c => [c.name, c.file])) : null,
       rejected: rejected.map(c => c.file),
+      replaced: finals.filter(c => c.previous).map(c => ({ name: c.name, file: c.file, previous: c.previous })),
       namesMatchedBy: plan?.matchedBy ?? null,
       declined,
       limit,
       usage,
-    }, null, 2));
+      context,
+    });
   } else {
     if (answer) console.log(answer);
     const sizes = [...new Set(kept.map(sizeOf).filter(Boolean))];
@@ -502,6 +578,7 @@ async function report(rpc, run, turn, opt) {
       console.error(`${kept.length} image(s) generated${sizes.length ? ` (${sizes.join(", ")})` : ""}` +
         (copied.length ? `, ${finals.length} copied to ${opt.out}${plan?.matchedBy ? ` under the requested names` : ""}${rejected.length ? `, ${rejected.length} other(s) to ${path.join(opt.out, "_rejected")}` : ""}` : `; copy them with: images ${run.threadId} --out <dir>`));
     }
+    if (context?.percent >= CONTEXT_WARN) console.error(`co-codex: ${run.name ?? run.threadId} has filled ${context.percent}% of its context (${context.tokens} of ${context.window} tokens); spawn a fresh session for the next batch`);
   }
   // Only a session co-codex started runs with approvals off, so only there was a refusal nobody's
   // choice. In a window a person holds, they declined it themselves: reported, not an error.
@@ -580,12 +657,16 @@ const commands = {
 
   async send(rpc, ctx, { pos, opt }) {
     // Codex fixes the sandbox when a thread starts; accepting the flag here would only pretend to change it.
-    if (opt.sandbox || opt.network) throw new BridgeError("the sandbox is fixed when a session starts, so send cannot change it; spawn a new session with --sandbox or --network");
+    if (opt.sandbox && !SANDBOXES.includes(opt.sandbox)) throw new BridgeError(`--sandbox must be one of ${SANDBOXES.join(", ")}`);
     const names = namesOption(opt, "send");
+    copyOptions(opt);
+    const retries = retriesOption(opt);
     const thread = await resolveThread(rpc, ctx, pos[0]);
     if (thread.status?.type === "notLoaded" && thread.threadSource !== SOURCE)
       throw new BridgeError(`"${thread.name ?? thread.id}" is not open in any Codex window. Open it with \`codex resume ${shellArg(thread.name ?? thread.id)}\` first, or spawn a new session.`);
-    const run = { ...await chooseRun(rpc, ctx.config, opt), threadId: thread.id, name: thread.name, names, own: thread.threadSource === SOURCE };
+    // A session co-codex started that nothing holds any more, for example after a restart, is loaded again here.
+    const reloaded = thread.status?.type === "notLoaded";
+    const run = { ...await chooseRun(rpc, ctx.config, opt), threadId: thread.id, name: thread.name, names, retries, own: thread.threadSource === SOURCE, reloaded };
     const switching = !!(run.model || run.effort);
     if (switching && !opt.wait && !opt.keep)
       throw new BridgeError("--tier/--model/--effort on send changes the model of that session; add --wait (it switches back after the turn) or --keep (it stays)");
@@ -595,11 +676,22 @@ const commands = {
     const timeoutS = timeoutOf(opt);
     const label = thread.name ?? thread.id;
     const on = `${run.model ?? "its model"} / ${run.effort ?? "its effort"}`;
-    const resumed = await subscribe(rpc, thread, ctx);
+    let resumed;
+    try { resumed = await subscribe(rpc, thread, ctx); }
+    catch (err) {
+      if (!reloaded) throw err;
+      throw new BridgeError(`could not load "${label}" onto the Codex daemon again (${err.message}); nothing holds it any more, for example after a restart. ` +
+        "Spawn a new session and attach the last image you kept with --ref.");
+    }
     Object.assign(run, resumed ? sandboxOf(resumed.sandbox) : { sandbox: null, network: null });
+    // Codex fixes the sandbox when a thread starts: repeating the session's own is fine, another one is refused.
+    if ((opt.sandbox && opt.sandbox !== run.sandbox) || (opt.network && run.network !== true))
+      throw new BridgeError(`the sandbox is fixed when a session starts, so send cannot change it (this session: ${accessLabel(run)}); spawn a new session with --sandbox or --network`);
+    await quotaGuard(rpc, ctx.config, opt);
     if (!opt.images) warnOffline(raw, run); // image sessions are read-only by design
     const before = new Set((await recentTurns(rpc, thread.id, RECENT, "summary")).map(t => t.id));
     run.before = opt.wait ? await readWindows(rpc) : null;
+    run.start = new Date().toISOString();
     const prev = switching && resumed ? { model: resumed.model ?? null, effort: resumed.reasoningEffort ?? null } : null;
     if (prev?.model && !prev.effort) prev.effort = await defaultEffort(rpc, prev.model);
     const was = prev ? ` (it was ${prev.model ?? "?"} / ${prev.effort ?? "?"})` : "";
@@ -613,7 +705,7 @@ const commands = {
       console.error(`queued for ${label} (${statusLabel(thread.status)})${switching ? ` on ${on}` : ""}${resumed ? "" : "; new window, answer is read from history"}`);
       if (switching && opt.keep) console.error(`co-codex: ${label} now runs ${on} for later turns too${was}`);
       if (!opt.wait) {
-        if (opt.json) console.log(JSON.stringify({ threadId: thread.id, name: thread.name ?? null, clientUserMessageId, queuedSubmissionId: queuedSubmission?.id ?? null, sandbox: run.sandbox, network: run.network }, null, 2));
+        if (opt.json) printJson({ threadId: thread.id, name: thread.name ?? null, clientUserMessageId, queuedSubmissionId: queuedSubmission?.id ?? null, sandbox: run.sandbox, network: run.network });
         else console.error(`wait for the answer with: wait ${shellArg(label)} --message ${clientUserMessageId}${namesHint(opt)}`);
         return;
       }
@@ -649,12 +741,15 @@ const commands = {
     if (opt.network && sandbox === "read-only") throw new BridgeError("--network does not work with the read-only sandbox; use workspace-write (the default) with --network");
     if (opt.network && sandbox === "danger-full-access") console.error("co-codex: --network is not needed with danger-full-access, which already has network access");
     const names = namesOption(opt, "spawn");
-    const run = { ...await chooseRun(rpc, ctx.config, opt), names };
+    copyOptions(opt);
+    const retries = retriesOption(opt);
+    const run = { ...await chooseRun(rpc, ctx.config, opt), names, retries };
     const raw = await readText(pos[0]);
     const text = compose(ctx.config, raw, run, opt);
     const input = inputs(text, opt.ref);
     const timeoutS = timeoutOf(opt);
     if ((await sessionsNamed(rpc, name)).length) throw new BridgeError(`a session named "${name}" already exists; send to it or pick another name`);
+    await quotaGuard(rpc, ctx.config, opt);
     const started = await rpc.request("thread/start", {
       cwd: path.resolve(opt.cwd ?? ctx.root),
       sandbox,
@@ -670,10 +765,11 @@ const commands = {
     if (!opt.images) warnOffline(raw, run); // image sessions are read-only by design
     await rpc.request("thread/name/set", { threadId: thread.id, name });
     run.before = opt.wait ? await readWindows(rpc) : null;
+    run.start = new Date().toISOString();
     const { turn } = await rpc.request("turn/start", { threadId: thread.id, input, ...(run.effort ? { effort: run.effort } : {}) });
     console.error(`spawned "${name}" ${thread.id} (${run.model ?? "default model"}${run.effort ? " / " + run.effort : ""}, ${accessLabel(run)}); watch it with \`codex resume ${shellArg(name)}\``);
     if (!opt.wait) {
-      if (opt.json) console.log(JSON.stringify({ threadId: thread.id, name, turnId: turn.id, tier: run.tier, model: run.model, effort: run.effort, sandbox: run.sandbox, network: run.network }, null, 2));
+      if (opt.json) printJson({ threadId: thread.id, name, turnId: turn.id, tier: run.tier, model: run.model, effort: run.effort, sandbox: run.sandbox, network: run.network });
       else console.log(thread.id);
       if (names) console.error(`collect the named images with: wait ${shellArg(name)}${namesHint(opt)}`);
       return;
@@ -685,6 +781,7 @@ const commands = {
   // Waits for: the turn of --message <id>; else the last queued message; else the latest turn.
   async wait(rpc, ctx, { pos, opt }) {
     const names = namesOption(opt, "wait");
+    copyOptions(opt);
     const thread = await resolveThread(rpc, ctx, pos[0]);
     const timeoutS = timeoutOf(opt);
     // A session no window holds has nothing running: read its history without loading it onto the daemon.
@@ -745,12 +842,12 @@ const commands = {
     const failed = all.filter(i => i.failure);
     const copied = opt.out ? copyImages(all, path.resolve(opt.out)) : [];
     if (opt.json) {
-      console.log(JSON.stringify({
+      printJson({
         threadId: thread.id,
         images: kept.map(i => ({ path: i.savedPath, threadId: i.threadId, turnId: i.turnId, itemId: i.itemId, transparent: i.transparent, width: i.width, height: i.height, prompt: i.prompt })),
         failed: failed.map(i => ({ itemId: i.itemId, failure: i.failure })),
         copied: copied.map(c => c.file),
-      }, null, 2));
+      });
       return;
     }
     for (const i of kept) console.log(i.savedPath ?? `(inline image ${i.itemId}; use --out to save it)`);
@@ -769,6 +866,7 @@ const commands = {
     const timeoutS = timeoutOf(opt);
     const name = opt.name ?? `opinion-${new Date().toISOString().replace(/\D/g, "").slice(2, 14)}`;
     if ((await sessionsNamed(rpc, name)).length) throw new BridgeError(`a session named "${name}" already exists; pick another --name`);
+    await quotaGuard(rpc, ctx.config, opt);
     const started = await rpc.request("thread/start", {
       cwd: path.resolve(opt.cwd ?? ctx.root),
       sandbox: "read-only", // an opinion never changes the project, whatever the config says for spawn
@@ -797,11 +895,11 @@ const commands = {
     if (!diff && answer) { try { parsed = JSON.parse(answer); } catch { /* the model ignored the schema: its text is shown as is */ } }
     const text = diff ? review : parsed ? null : answer;
     if (opt.json) {
-      console.log(JSON.stringify({
+      printJson({
         threadId: thread.id, name, kind: diff ? "code-review" : "opinion", mode: diff ? null : mode, target,
         model: run.model ?? null, effort: run.effort ?? null, status: done.status,
         opinion: parsed, text: text || null, error: done.error?.message ?? null, limit,
-      }, null, 2));
+      });
     } else if (parsed || text) {
       console.log(parsed ? renderOpinion(parsed) : text);
     }
@@ -850,7 +948,7 @@ const commands = {
     }
     const confirm = `cleanup --older-than ${olderThan}${prefix ? ` --name-prefix ${shellArg(prefix)}` : ""} --yes`;
     if (opt.json) {
-      console.log(JSON.stringify({ olderThan, cutoff: new Date(cutoff * 1000).toISOString(), namePrefix: prefix, dryRun: !opt.yes, sessions: results, skipped }, null, 2));
+      printJson({ olderThan, cutoff: new Date(cutoff * 1000).toISOString(), namePrefix: prefix, dryRun: !opt.yes, sessions: results, skipped });
       if (results.some(r => r.error)) throw new BridgeError("some sessions could not be deleted (see the JSON)");
       return;
     }
@@ -882,7 +980,7 @@ const commands = {
 
   async limits(rpc, ctx, { opt }) {
     const r = await rpc.request("account/rateLimits/read", { excludeResetCreditDetails: true });
-    if (opt.json) return console.log(JSON.stringify(r, null, 2));
+    if (opt.json) return printJson(r);
     const byId = r.rateLimitsByLimitId ?? (r.rateLimits ? { [r.rateLimits.limitId ?? "codex"]: r.rateLimits } : {});
     const plan = r.rateLimits?.planType ?? Object.values(byId)[0]?.planType ?? "unknown";
     console.log(`Plan: ${plan}${r.ordinaryUsageAllowed === false ? "  (included usage is blocked right now)" : ""}`);
@@ -902,6 +1000,16 @@ async function doctor(ctx) {
   const bad = (label, text) => { failed = true; console.log(`FAIL  ${label.padEnd(9)} ${text}`); };
   const note = (label, text) => console.log(`      ${label.padEnd(9)} ${text}`);
   note("system", `${process.platform} ${process.arch}, node ${process.versions.node}`);
+  // A workflow script that names a plugin-cache path keeps running that version after an update.
+  const self = ownVersion(SKILL_DIR);
+  note("co-codex", `${self ?? "version unknown"} (${SKILL_DIR})`);
+  const plugin = installedPlugins()[0] ?? null;
+  if (plugin && !samePath(plugin.installPath, path.resolve(SKILL_DIR, "..", "..")) && plugin.version !== self) {
+    note("plugin", `Claude Code has co-codex ${plugin.version ?? "?"} installed (${plugin.installPath}); this copy is ${self ?? "?"}. ` +
+      "A script with a versioned plugin path keeps running old code: call the launcher instead");
+  }
+  const launcher = ensureLauncher(SELF);
+  note("launcher", launcher ? `node "${launcher}" <command> (the same path after every plugin update)` : "could not be written");
 
   const bin = findCodex();
   const version = runCodex(["--version"], { timeout: 30_000 });
@@ -964,6 +1072,15 @@ async function doctor(ctx) {
   const mode = ctx.config.spawn?.sandbox;
   const net = mode === "danger-full-access" ? "network on" : mode === "read-only" ? "no network" : "network off unless --network";
   note("spawn", `co-codex starts sessions with sandbox ${mode}, ${net}, approvals ${ctx.config.spawn?.approvalPolicy}`);
+  const latest = await latestVersion();
+  const have = plugin?.version ?? self;
+  if (latest.version && have && newer(latest.version, have)) {
+    note("update", `co-codex ${latest.version} is out, you have ${have}. In Claude Code: /plugin, update the co-codex marketplace, then the plugin`);
+  } else if (latest.version) {
+    ok("update", `${have ?? latest.version} is the newest version`);
+  } else if (latest.error) {
+    note("update", `not checked: ${latest.error}`);
+  }
   return failed ? 1 : 0;
 }
 
@@ -973,7 +1090,7 @@ function estimateLimits(ctx, { opt }) {
   const tier = opt.tier ?? null;
   if (tier && !ctx.config.tiers?.[tier]) throw new BridgeError(`unknown tier "${tier}"; known: ${Object.keys(ctx.config.tiers ?? {}).join(", ")}`);
   const e = estimate(n, { tier });
-  if (opt.json) { console.log(JSON.stringify(e, null, 2)); return 0; }
+  if (opt.json) { printJson(e); return 0; }
   const on = tier ? ` on the ${tier} tier` : "";
   if (!e.runs) {
     console.log(`No past image runs${on} to estimate from yet. co-codex logs each completed --images --wait run in ${e.log}.`);
@@ -988,8 +1105,10 @@ function estimateLimits(ctx, { opt }) {
     const whole = Math.round(percent);
     return whole === 0 ? (used ? `less than 1% of the ${w}` : `no measurable share of the ${w}`) : `about ${whole}% of the ${w}`;
   };
+  const merged = e.merged ? `, ${e.merged} of them overlapping and measured together` : "";
+  const legacy = e.legacy ? " These runs were logged before co-codex recorded start times, so parallel ones among them counted each other's use and the share can be several times too high." : "";
   console.log(`${n} image(s)${on}: ${share(e.fiveHour, "5-hour window")} and ${share(e.weekly, "weekly window")}, ` +
-    `from ${e.runs} past run(s); other Codex use in the same window inflates it.`);
+    `from ${e.runs} past run(s)${merged}; other Codex use in the same window inflates it.${legacy}`);
   return 0;
 }
 
@@ -1016,6 +1135,7 @@ async function main() {
   }
   const args = parseArgs(rest);
   if (args.pos.length > ARITY[cmd]) throw new BridgeError(`${cmd} takes ${ARITY[cmd] || "no"} argument${ARITY[cmd] === 1 ? "" : "s"}, got: ${args.pos.map(shellArg).join(" ")}`);
+  if (cmd !== "doctor") ensureLauncher(SELF); // doctor writes it and says where
   const { root, git } = projectRoot();
   const { config, sources } = loadConfig(root);
   const ctx = { root, git, config, sources };

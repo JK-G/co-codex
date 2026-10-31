@@ -16,7 +16,8 @@
 //
 // Markers in the message text pick the turn's behaviour: [[image]], [[subagent]], [[limit]],
 // [[slow]], [[approval]], [[declined]] (refused actions), [[images:N]] (N image generations),
-// [[fail:K]] (generation K fails), [[keep:a.png=1,b.png=3]] (a KEEP line ends the answer).
+// [[fail:K]] (generation K fails), [[keep:a.png=1,b.png=3]] (a KEEP line ends the answer),
+// [[error]] (the turn fails with "Bad Request"), [[context:N]] (the turn's token count; default 12000).
 // Each usable image adds 2% to the 5-hour window and 1% to the weekly one. A turn completes at its `dueAt` time: a timer in the proxy that started
 // it emits the events, and any later read completes overdue turns from the state file, so a turn
 // started by a CLI process that exited early still ends (deterministically) for the next one.
@@ -36,7 +37,7 @@ const METHODS = [
   "thread/resume", "thread/settings/update", "thread/turns/list", "thread/queue/add", "thread/queue/list", "turn/start", "review/start",
   "turn/interrupt", "model/list", "account/read", "account/rateLimits/read", "config/read",
 ];
-const NOTIFICATIONS = ["item/started", "item/completed", "turn/started", "turn/completed", "thread/status/changed"];
+const NOTIFICATIONS = ["item/started", "item/completed", "turn/started", "turn/completed", "thread/status/changed", "thread/tokenUsage/updated"];
 
 const MODELS = [
   { id: "gpt-6-luna", model: "gpt-6-luna", description: "Fast and cheap", hidden: false, efforts: ["low", "medium", "high", "xhigh"] },
@@ -200,7 +201,11 @@ function complete(s, thread, turn) {
   if (!text.includes("[[limit]]")) { s.usedFive = Math.min(99, (s.usedFive ?? 12) + 2 * made); s.usedWeek = Math.min(99, (s.usedWeek ?? 40) + made); }
   const keep = /\[\[keep:([^\]]*)\]\]/.exec(text)?.[1];
   const tail = keep ? `\nKEEP: ${keep.split(",").join(", ")}` : "";
-  if (text.includes("[[limit]]")) {
+  turn.contextTokens = Number(/\[\[context:(\d+)\]\]/.exec(text)?.[1] ?? 12000);
+  if (text.includes("[[error]]")) {
+    turn.status = "failed";
+    turn.error = { message: "Bad Request" };
+  } else if (text.includes("[[limit]]")) {
     s.limitHit = true;
     turn.status = "failed";
     turn.error = { message: "You've hit your usage limit. Try again later.", codexErrorInfo: "usageLimitExceeded" };
@@ -384,6 +389,8 @@ function schedule(threadId, turn) {
       notify("item/started", { threadId, turnId: done.id, item });
       notify("item/completed", { threadId, turnId: done.id, item });
     }
+    const usage = { totalTokens: done.contextTokens ?? 12000, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 };
+    notify("thread/tokenUsage/updated", { threadId, turnId: done.id, tokenUsage: { total: { ...usage, totalTokens: usage.totalTokens * 2 }, last: usage, modelContextWindow: 475000 } });
     notify("turn/completed", { threadId, turn: publicTurn(done) });
     notify("thread/status/changed", { threadId, status: { type: "idle" } });
   };

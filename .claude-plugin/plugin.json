@@ -1,6 +1,6 @@
 {
   "name": "co-codex",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Generate images and hand tasks to OpenAI Codex from Claude Code: image requests go to Codex automatically, quality tiers set the model and effort, every generated image comes back, and Codex can give an optional read-only second opinion on plans and diffs, and before UI code it can offer a round of Codex mockups to pick a direction",
   "author": {
     "name": "JK-G",

@@ -13,6 +13,7 @@ export const EFFORT_ORDER = ["none", "minimal", "low", "medium", "high", "xhigh"
 export const DEFAULTS = {
   signature: "[Claude Code → Codex]",
   defaultTier: null, // null: Codex's own default model and effort unless --tier is given
+  maxUsedPercent: null, // spawn, send and opinion refuse to send when a quota window is above this share (--max-used)
   spawn: {
     sandbox: "workspace-write", // danger-full-access | workspace-write | read-only
     approvalPolicy: "never", // nobody watches a spawned session, so blocked commands go back to Codex instead of waiting

@@ -9,6 +9,7 @@ import { DEFAULTS, clampEffort, loadConfig, merge, resolveTier, userConfigPath }
 import { parseKeepLine, parseNames, planNames, pngSize } from "../skills/co-codex/scripts/lib/images.mjs";
 import { networkHints, sandboxOf } from "../skills/co-codex/scripts/lib/sandbox.mjs";
 import { declinedActions, soundsRefused } from "../skills/co-codex/scripts/lib/turns.mjs";
+import { newer } from "../skills/co-codex/scripts/lib/install.mjs";
 import { estimate, logRun, usageLogPath, windowsOf } from "../skills/co-codex/scripts/lib/usage.mjs";
 
 const tmp = t => {
@@ -348,8 +349,47 @@ describe("usage", () => {
     assert.deepEqual(estimate(1, { tier: "draft", env }).weekly, { percent: 0.3, used: true });
     assert.deepEqual(estimate(10, { tier: "max", env }).fiveHour, { percent: 0, used: false });
     assert.equal(estimate(10, { env }).runs, 6);
+    assert.equal(draft.legacy, true); // logged without start times
     const lines = fs.readFileSync(usageLogPath(env), "utf8").trim().split("\n").map(l => JSON.parse(l));
     assert.equal(lines[4].fiveHourDelta, null);
     assert.equal(lines[4].weeklyDelta, 1);
+  });
+
+  test("runs that overlap in time are measured together, so parallel runs do not count each other's use", t => {
+    const env = { XDG_CONFIG_HOME: tmp(t) };
+    const at = m => `2026-10-28T08:${String(m).padStart(2, "0")}:00Z`;
+    const line = (s, e, b5, a5, images, tier = "high") => JSON.stringify({
+      start: at(s), date: at(e), tier, images, fiveHourDelta: a5 - b5, weeklyDelta: 0,
+      fiveHour: { before: b5, after: a5 }, weekly: { before: 1, after: 1 },
+    });
+    fs.mkdirSync(path.dirname(usageLogPath(env)), { recursive: true });
+    fs.writeFileSync(usageLogPath(env), [
+      JSON.stringify({ date: at(0), tier: "high", images: 1, fiveHourDelta: 50, weeklyDelta: 9 }), // no start time: left out
+      line(10, 20, 10, 20, 2), // two parallel runs: 10 + 8 points on their own,
+      line(15, 22, 14, 22, 2), // but the window went from 10 to 22 while they ran
+      line(30, 35, 22, 24, 1), // a run of its own
+    ].join("\n") + "\n");
+    const e = estimate(10, { tier: "high", env });
+    assert.equal(e.runs, 3);
+    assert.equal(e.merged, 2);
+    assert.equal(e.legacy, false);
+    assert.deepEqual(e.fiveHour, { percent: 28, used: true }); // 14 points over 5 images, not 20 over 5
+    // a merged group that mixes tiers counts only for the all-tier estimate
+    fs.appendFileSync(usageLogPath(env), line(33, 40, 23, 26, 1, "draft") + "\n");
+    assert.deepEqual(estimate(10, { tier: "high", env }).fiveHour, { percent: 30, used: true }); // 12 over 4
+    assert.equal(estimate(10, { tier: "draft", env }).runs, 0);
+    const all = estimate(10, { env });
+    assert.equal(all.runs, 4);
+    assert.deepEqual(all.fiveHour, { percent: 26.7, used: true }); // 12 + (26 - 22) points over 6 images
+    // a window that reset inside a merged group measures nothing there
+    fs.appendFileSync(usageLogPath(env), line(50, 55, 90, 95, 1, "max") + "\n" + line(52, 58, 95, 3, 1, "max") + "\n");
+    assert.deepEqual(estimate(10, { tier: "max", env }).fiveHour, { percent: null, used: false });
+  });
+
+  test("newer compares versions part by part", () => {
+    assert.equal(newer("0.10.0", "0.9.0"), true);
+    assert.equal(newer("1.0.0", "0.99.9"), true);
+    assert.equal(newer("0.5.0", "0.5.0"), false);
+    assert.equal(newer("0.4.1", "0.5.0"), false);
   });
 });

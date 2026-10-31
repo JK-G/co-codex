@@ -16,6 +16,11 @@ node "${CLAUDE_SKILL_DIR}/scripts/co-codex.mjs" <command> [options]
 `help` prints the full usage. Stdout carries only Codex's final answer (or JSON with `--json`);
 status lines go to stderr.
 
+Subagents and saved workflow scripts do not have `${CLAUDE_SKILL_DIR}`. Give them the launcher,
+`node ~/.config/co-codex/bin/co-codex.mjs` (`doctor` prints its exact path): it runs the installed
+version, so it keeps working after a plugin update. Never write a plugin-cache path with a version
+in it into a script. What to paste into their prompt: `references/subagent-brief.md`.
+
 | Command | What it does |
 |---|---|
 | `list [--all]` | Open sessions (id, status, name, model); `--all` adds saved ones in this project |
@@ -47,14 +52,16 @@ Do not answer that you cannot make images, and do not interview the user. Go:
    node "${CLAUDE_SKILL_DIR}/scripts/co-codex.mjs" spawn "<brief>" --name img-<short-slug> --tier standard --images --names hero.png,icon.png --sandbox read-only --wait --out <folder> --json
    ```
 
-   Tier: `draft` when the user wants something quick, a sketch or several options; `high` for
-   final, production or print use; `max` only when asked. Folder: where the user said, else the
-   project's existing images or assets folder, else `./generated-images`. Several images or
-   variants in one request: one session, with the count in the brief.
+   Tier: `draft` when the user wants something quick, a sketch, exploration boards or several
+   options to pick from; `high` for final, production or print use; `max` only when asked.
+   Folder: where the user said, else the project's existing images or assets folder, else
+   `./generated-images`. Several images or variants in one request: one session, with the count
+   in the brief.
    `--names` lists one file name per image, in the order the brief describes them. Codex ends
    its answer with a `KEEP:` line that says which generation it kept for each name; co-codex
    copies those under the names and every other image of the turn to `<folder>/_rejected/`.
-   It never overwrites a different file: a taken name becomes `name-2.png`.
+   It never overwrites a different file: a taken name becomes `name-2.png`. With `--replace` the
+   name gets the new image and the old file moves to `<folder>/_rejected/<name>-replaced.png`.
 3. When it finishes, Read the files in the JSON `names` map, check each against the brief, and
    give the user the paths with one line on what you checked. Say in one line that it used their
    Codex quota. `namesMatchedBy` says how the names were matched:
@@ -64,12 +71,14 @@ Do not answer that you cannot make images, and do not interview the user. Go:
    - `null`: the files kept their item ids. Match them by eye, as the warning on stderr says.
 4. Changes ("make it bluer", "without the text"): send them to the same session with the
    previous file attached:
-   `send img-<short-slug> "<change>" --ref <previous file> --images --names <name> --wait --out <folder> --json`.
+   `send img-<short-slug> "<change>" --ref <previous file> --images --names <name> --replace --wait --out <folder> --json`.
 
 The JSON gives each image's real `width` and `height`. gpt-image-2 chooses its own output size
-whatever the brief asks (seen: 1254x1254 for square and 1538x1022 for landscape). When exact
-pixels matter, resize or crop the copies afterwards with the project's own tools; co-codex has no
-image library and does not resize.
+whatever the brief asks (seen: 1536x1024 for most landscape images, 1254x1254 square, 1024x1536
+portrait, and wide ones such as 1641x958 or 2172x724). When exact pixels matter, resize or crop
+the copies afterwards with the project's own tools; co-codex has no image library and does not
+resize. When you measure and post-process the images anyway, add `--retries 0` or `1`: the tier's
+own checks redo images that are fine, and every redo spends quota. Pixel art: `references/image-briefs.md`.
 5. If `doctor` or the command says Codex is missing or signed out, tell the user to install
    Codex (https://developers.openai.com/codex) and run `codex login`.
 
@@ -199,8 +208,9 @@ subagent), or for the user's decision.
 
 ## Choosing a sandbox
 
-The sandbox is fixed when a session starts; `send` cannot change it. To change it, spawn a new
-session. The spawn line and `--json` show the `sandbox` and whether it has `network` access.
+The sandbox is fixed when a session starts: `send` accepts the session's own `--sandbox` or
+`--network` and refuses any other. To change it, spawn a new session. The spawn line and `--json`
+show the `sandbox` and whether it has `network` access.
 
 | Task | Sandbox |
 |---|---|
@@ -249,13 +259,14 @@ you need alpha), the style and the count, and attach references with `--ref <fil
 one is the edit target and which are style references only). Add `--images` so the tier's quality
 rules go into the message. For batches add `--subagents`: Codex then splits the work across its
 own subagents. `--names` does not work with `--subagents`, because each subagent numbers its
-images in its own thread. Templates for game art, UI mockups and ad creatives:
-`references/image-briefs.md`.
+images in its own thread. Templates for game art (with pixel-art lessons), UI mockups and ad
+creatives: `references/image-briefs.md`.
 
 ## Long tasks
 
 1. Run `spawn ... --wait --json` or `send ... --wait --json` with Bash `run_in_background: true`.
-   You are notified when it exits; stdout holds the answer.
+   You are notified when it exits; stdout holds the answer. In the foreground the Bash tool stops a
+   command after 10 minutes, so add `--timeout 540` there: co-codex exits with code 2 first.
 2. Exit 2 means `--timeout` passed while Codex keeps working: run `wait <name>` again, also in
    the background.
 3. Sessions live on the Codex daemon, not in your process, so they survive you being restarted.
@@ -266,15 +277,28 @@ images in its own thread. Templates for game art, UI mockups and ad creatives:
   later, even when it was queued behind other work.
 - `--out <dir>` copies the turn's images there and logs each in `co-codex-images.jsonl`.
   `--json` returns the answer, model, sandbox, image paths and sizes, refused actions, limit
-  status and quota use (`usage`, the windows before and after the run) as one object.
+  status, quota use (`usage`, the windows before and after the run) and `context` (how full the
+  session's context is; above 75% use a fresh session for the next batch) as one object.
 - Look at the images yourself (Read the PNG) before you report them as done.
+
+## Subagents, workflows and chains of batches
+
+- A subagent or workflow agent does not have this skill. Paste `references/subagent-brief.md` into
+  its prompt with the launcher path and the options filled in.
+- Batches where a later step needs an earlier result (a design sheet, then its redraws; one area,
+  then the next): run them as steps of a workflow, or one after another in the background, and
+  pass each step's `--names` files to the next step as `--ref`. Give every step the user's quota
+  ceiling as `--max-used`; after exit 4, resend that step once the window has reset. co-codex has
+  no queue of its own.
+- Parallel runs are fine, one session each. The quota log measures overlapping runs together, so
+  they do not count each other's use.
 
 | Exit | Meaning | What to do |
 |---|---|---|
 | 0 | answered | use the answer |
 | 2 | timed out, Codex keeps working | run `wait <session>` again |
 | 3 | turn failed or was interrupted | read the error, fix the task, resend |
-| 4 | usage limit reached | tell the user the reset time from the message; resend the unfinished part after it |
+| 4 | usage limit reached, or a window was above `--max-used` (then nothing was sent) | tell the user the reset time from the message; resend the unfinished part after it |
 | 5 | answered, but some actions were refused because they need approval (only in sessions co-codex started; in a window a person holds the declines were theirs, so the exit is 0 with `declined` in the JSON) | tell the user which (`declined` in the JSON, `!` lines on stderr) and ask them to open `codex resume <name> -a on-request` and let Codex retry there, where they approve it. If the retry needs the network, they add `-c sandbox_workspace_write.network_access=true`, or `-s danger-full-access` only if they agree to it |
 | 1 | co-codex error | read the message; run `doctor` |
 
@@ -283,7 +307,9 @@ images in its own thread. Templates for game art, UI mockups and ad creatives:
 - Tell the user each time you send work to Codex. It runs on their ChatGPT plan and spends their
   Codex quota; image generation spends it 3-5x faster than text. Run `limits` before a large batch;
   `limits --estimate <n> --tier <t>` gives the expected share for n images from past runs on this
-  machine.
+  machine. After a run, `usage` in the `--json` result already holds the windows, so skip a separate
+  `limits` call. When the user or the project sets a quota ceiling, pass it as `--max-used <pct>`
+  (or `maxUsedPercent` in the config): co-codex then sends nothing while a window is above it.
 - A line starting with `!` means Codex waits for an approval, or lists actions it was refused for
   lack of one. co-codex never approves; ask the user to answer in the Codex window. Never try to
   approve on Codex's behalf.
@@ -292,6 +318,8 @@ images in its own thread. Templates for game art, UI mockups and ad creatives:
   the user allows it or their config sets it.
 - Codex cannot message you on its own. If it needs something, it ends its turn with a question,
   which arrives as its answer. Reply with another `send`.
+- Use one name prefix per batch or project (`img-`, `ui-`, or the project's own), and when a batch
+  is checked and delivered, run `cleanup --name-prefix <prefix>` to list its sessions.
 - Clean up throwaway sessions once the user no longer needs them: `cleanup --name-prefix img-`
   lists the ones co-codex started in this project that no window has open and nobody used for 2
   days (`--older-than` changes that); add `--yes` to delete them. It never touches sessions

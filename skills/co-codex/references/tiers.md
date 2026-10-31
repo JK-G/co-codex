@@ -20,9 +20,16 @@ If the model does not support the tier's effort, the strongest supported effort 
 Codex's built-in image tool always uses gpt-image-2. The agent model decides how well the image
 prompt is written, how carefully the result is checked against the brief and how often it is
 redone. In a test on 2026-10-16 a `draft` session on gpt-6-luna still produced a 1254x1254 image:
-asking for "the smallest size" did not shrink the output. Earlier runs gave 1254x1254 for square
-and 1538x1022 for landscape images. So a cheaper tier saves agent tokens and retries, not
-image resolution.
+asking for "the smallest size" did not shrink the output. Of about 300 logged images, most
+landscape ones came back at 1536x1024, square ones at 1254x1254 and portrait ones at 1024x1536,
+with a few wide sizes such as 1641x958 and 2172x724. So a cheaper tier saves agent tokens and
+retries, not image resolution.
+
+`--retries <0-3>` replaces the tier's regeneration rule for one run, without changing its model
+or effort. Use `0` or `1` when the caller measures and post-processes the images anyway: on `high`,
+Codex's own checks redo images whose size or grid it judges wrong, although the fix comes after
+the run. co-codex also tells Codex, on every tier, not to regenerate an image only for its pixel
+size.
 
 On any tier the output size does not follow the brief: a brief that asked for 1080x1080 got
 1254x1254. co-codex reads each PNG's real `width` and `height` and puts them in the JSON results
@@ -63,9 +70,18 @@ project. Only the fields you give change:
   "defaultTier": "standard",
   "tiers": {
     "draft": { "effort": "low" },
-    "review": { "about": "second opinion on a diff", "models": ["gpt-6.1-sol"], "effort": "xhigh" }
-  }
+    "review": { "about": "second opinion on a diff", "models": ["gpt-6.1-sol"], "effort": "xhigh" },
+    "art": {
+      "about": "assets that are measured and fitted afterwards",
+      "models": ["gpt-6.1-sol"], "effort": "high",
+      "imageNote": "Full detail. Check each image once against the brief and regenerate at most once, only on a clear miss. Do not judge exact pixel sizes or grids: they are measured afterwards."
+    }
+  },
+  "maxUsedPercent": 85
 }
 ```
+
+`maxUsedPercent` makes `spawn`, `send` and `opinion` send nothing while the 5-hour or weekly window
+is above that share; `--max-used` overrides it for one run.
 
 See `templates/co-codex.config.json` for every setting.
