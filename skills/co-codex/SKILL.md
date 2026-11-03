@@ -187,7 +187,7 @@ subagent), or for the user's decision.
 3. Mockups, moodboards, copy variants and other choices between options:
    `opinion - --mode judge --file a.png --file b.png --json < brief.md`, with the goal and
    constraints in the text and without your own pick (judge is always independent). The result has
-   `winner` (a file option by its path as listed, or `none` when no option will do), `ranking`
+   `winner` (a file option as you passed it to `--file`, or `none` when no option will do), `ranking`
    (every option with why and evidence, best first) and `concerns` (what must change in the
    winner); there is no `verdict`. Codex opens the images and can measure contrast from the pixels.
    Check its numbers before you repeat them.

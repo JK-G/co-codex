@@ -18,7 +18,8 @@
 // [[slow]], [[approval]], [[declined]] (refused actions), [[images:N]] (N image generations),
 // [[fail:K]] (generation K fails), [[keep:a.png=1,b.png=3]] (a KEEP line ends the answer),
 // [[error]] (the turn fails with "Bad Request"), [[context:N]] (the turn's token count; default 12000).
-// A turn with an outputSchema answers with a fixed opinion, or a fixed judgement when the schema requires `winner`.
+// A turn with an outputSchema answers with a fixed opinion, or a judgement when the schema requires `winner`:
+// the second listed file wins over the first, named as listed, or by bare name with [[basenames]].
 // Each usable image adds 2% to the 5-hour window and 1% to the weekly one. A turn completes at its `dueAt` time: a timer in the proxy that started
 // it emits the events, and any later read completes overdue turns from the state file, so a turn
 // started by a CLI process that exited early still ends (deterministically) for the next one.
@@ -218,9 +219,12 @@ function complete(s, thread, turn) {
     turn.status = "completed";
     turn.error = null;
   } else if (turn.outputSchema && !text.includes("[[noschema]]")) {
+    // A judgement names the listed files as listed (absolute paths), or by bare name with [[basenames]].
+    const listed = [...text.matchAll(/^- (.+)$/gm)].map(m => m[1].trim()).map(f => (text.includes("[[basenames]]") ? path.basename(f) : f));
+    const [optA, optB] = listed.length >= 2 ? listed : ["a.png", "b.png"];
     const opinion = turn.outputSchema.required?.includes("winner") ? {
-      winner: "b.png", confidence: "high", summary: "mock judgement",
-      ranking: [{ option: "b.png", why: "clearest", evidence: "contrast 7.1:1" }, { option: "a.png", why: "busy", evidence: "" }],
+      winner: optB, confidence: "high", summary: "mock judgement",
+      ranking: [{ option: optB, why: "clearest", evidence: "contrast 7.1:1" }, { option: optA, why: "busy", evidence: "" }],
       concerns: [{ severity: "medium", point: "logo too small", why: "unreadable on mobile", suggestion: "scale it up", evidence: "48px wide" }],
       alternatives: [], questions: [],
     } : {

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.1 (2026-11-03)
+
+- `opinion --mode judge` shows file options as you passed them to `--file`, in the text and in `--json` (`winner`, `ranking[].option`). Codex still gets absolute paths, so two `hero.png` in different folders stay apart; a bare file name it answers with is mapped back when exactly one listed file has it. In the 0.6.0 live run the winner came back as a long absolute path.
+- Docs: the 0.6.0 results in `docs/examples/business.md` (the same `high` brief took 3 generations instead of 6) and the judge command for the moodboards.
+
 ## 0.6.0 (2026-11-03)
 
 From three business runs on 2026-11-03: moodboards, social media templates and dashboard mockups for a made-up brand, and three Codex reviews of them (`docs/examples/business.md`).

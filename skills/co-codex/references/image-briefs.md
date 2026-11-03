@@ -161,7 +161,7 @@ rule holds, and the images look like one family.
 
 Exact hex values do not survive generation: colours come back a few units off (#080A0F for
 #0B0D12). co-codex tells Codex not to redo images for that; before 0.6.0, one `high` run spent 6
-generations on 3 images chasing it. When the template will be rebuilt in a design tool anyway,
+generations on 3 images chasing it, and with 0.6.0 the same brief took 3. When the template will be rebuilt in a design tool anyway,
 `--retries 0` saves the remaining checks too.
 
 ### Ad creatives

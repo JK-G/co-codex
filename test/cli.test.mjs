@@ -606,6 +606,30 @@ test("opinion: fresh read-only session on the high tier, verdict rendered", asyn
     assert.equal(out.text, null);
   });
 
+  test("opinion --mode judge shows file options as they were passed, and keeps same-named files apart", async t => {
+    const { cli, thread, proj } = sandbox(t);
+    for (const d of ["v1", "v2"]) {
+      fs.mkdirSync(path.join(proj, d));
+      fs.writeFileSync(path.join(proj, d, "hero.png"), d);
+    }
+    const r = await cli(["opinion", "Pick a hero", "--mode", "judge", "--file", "v1/hero.png", "--file", "v2/hero.png", "--name", "j3"]);
+    ok(r, "judge");
+    assert.match(r.stdout, new RegExp(`^Winner: v2/hero\\.png \\(confidence high\\)`)); // shown as typed, not as the absolute path Codex was given
+    assert.match(r.stdout, /Ranking:\n  1\. v2\/hero\.png: clearest\n.*\n  2\. v1\/hero\.png: busy/);
+    assert.ok(thread("j3").turns[0].input[0].text.includes(`- ${path.join(proj, "v1", "hero.png")}`), "Codex gets absolute paths");
+    const out = json(await cli(["opinion", "Pick a hero", "--mode", "judge", "--file", "v1/hero.png", "--file", "v2/hero.png", "--name", "j4", "--json"]));
+    assert.equal(out.opinion.winner, "v2/hero.png");
+    assert.deepEqual(out.opinion.ranking.map(x => x.option), ["v2/hero.png", "v1/hero.png"]);
+    // A bare file name maps back when one listed file has it, and stays as is when two do.
+    fs.mkdirSync(path.join(proj, "imgs"));
+    fs.writeFileSync(path.join(proj, "imgs", "a.png"), "a");
+    fs.writeFileSync(path.join(proj, "imgs", "b.png"), "b");
+    const unique = json(await cli(["opinion", "[[basenames]] Pick", "--mode", "judge", "--file", "imgs/a.png", "--file", "imgs/b.png", "--name", "j5", "--json"]));
+    assert.equal(unique.opinion.winner, "imgs/b.png");
+    const twin = json(await cli(["opinion", "[[basenames]] Pick", "--mode", "judge", "--file", "v1/hero.png", "--file", "v2/hero.png", "--name", "j6", "--json"]));
+    assert.equal(twin.opinion.winner, "hero.png");
+  });
+
   test("opinion reports the windows around its turn and logs nothing", async t => {
     const { cli, dir } = sandbox(t);
     const out = json(await cli(["opinion", "[[images:1]] judge these", "--name", "op6", "--json"]));

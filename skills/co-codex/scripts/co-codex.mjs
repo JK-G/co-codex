@@ -247,6 +247,20 @@ function canon(p) {
   return caseless ? r.toLowerCase() : r;
 }
 const samePath = (a, b) => !!a && !!b && canon(a) === canon(b);
+// Judge options that are files go to Codex as absolute paths, so two hero.png in different folders
+// stay apart. The answer shows each one as the caller passed it to --file; a bare file name is
+// mapped back only when exactly one listed file has it. Anything else (such as "none") is kept.
+function optionLabels(o, files, typed) {
+  if (!o || typeof o !== "object" || !files.length) return o;
+  const label = name => {
+    if (typeof name !== "string") return name;
+    const i = files.findIndex(f => samePath(f, name));
+    if (i >= 0) return typed[i];
+    const same = files.flatMap((f, j) => (path.basename(f) === name ? [j] : []));
+    return same.length === 1 ? typed[same[0]] : name;
+  };
+  return { ...o, winner: label(o.winner), ranking: Array.isArray(o.ranking) ? o.ranking.map(r => ({ ...r, option: label(r?.option) })) : o.ranking };
+}
 function inside(child, parent) {
   if (!child || !parent) return false;
   const c = canon(child), p = canon(parent);
@@ -966,6 +980,7 @@ const commands = {
     const review = diff ? ((done.items ?? []).filter(i => i.type === "exitedReviewMode" && i.review?.trim()).pop()?.review ?? answer) : null;
     let parsed = null;
     if (!diff && answer) { try { parsed = JSON.parse(answer); } catch { /* the model ignored the schema: its text is shown as is */ } }
+    if (mode === "judge") parsed = optionLabels(parsed, files, opt.file ?? []);
     const text = diff ? review : parsed ? null : answer;
     if (opt.json) {
       printJson({

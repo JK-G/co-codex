@@ -31,13 +31,19 @@ Codex ranked Signal, Ledger, Field, the same order as Claude. It sampled pixels 
 
 All six ratios Codex quoted are correct. It also disagreed with one of Claude's reasons: Claude had ranked Ledger and Field lower for needing photography, and Codex pointed out that their text tiles already work without photos.
 
+co-codex 0.6.0 added `--mode judge` for this kind of choice, and `--no-project` for material that is not about the folder you run it from. Rerun that way, Codex returned the same ranking as fields: a `winner`, every option with its reason and measured contrast, and what must change in the winner.
+
+```
+co-codex opinion - --mode judge --no-project --file moodboards/ledger.png --file moodboards/signal.png --file moodboards/field.png --json < judge-moodboards.md
+```
+
 **Finalize on `high`.** The chosen board goes back as a style reference, with the contrast rule written into the brief ([brief](briefs/social-templates.md)):
 
 ```
 co-codex spawn - --name biz-social-final --tier high --images --ref moodboards/signal.png --names post-stat-1x1.png,carousel-cover-4x5.png,story-webinar-9x16.png --sandbox read-only --wait --out templates --json < social-templates.md
 ```
 
-5 minutes 26 seconds on GPT-6.1 Sol: a 1:1 post (1254x1254), a 4:5 carousel cover (1122x1402) and a 9:16 story (941x1672). Every word is as given, and the story keeps its top 14% and bottom 20% free. It took 6 generations for 3 images. Codex redid each one to get closer to the exact hex values, and the drift it chased was a few units (#080A0F instead of #0B0D12). When the colours will be set in the real template anyway, `--retries 0` saves those generations.
+5 minutes 26 seconds on GPT-6.1 Sol: a 1:1 post (1254x1254), a 4:5 carousel cover (1122x1402) and a 9:16 story (941x1672). Every word is as given, and the story keeps its top 14% and bottom 20% free. It took 6 generations for 3 images. Codex redid each one to get closer to the exact hex values, and the drift it chased was a few units (#080A0F instead of #0B0D12). co-codex 0.6.0 tells Codex not to do that: the same brief on `high` then took 3 generations in 2 minutes 43 seconds, with the same result.
 
 ## 2. Dashboard mockups and a design review
 
