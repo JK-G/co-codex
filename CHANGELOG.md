@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.0 (2026-11-03)
+
+From three business runs on 2026-11-03: moodboards, social media templates and dashboard mockups for a made-up brand, and three Codex reviews of them (`docs/examples/business.md`).
+
+- `opinion --mode judge`: Codex ranks two or more options (files through `--file`, or options named in the text), names a winner and says what must change in it. `--json` returns `winner`, `ranking` (every option with why and evidence, best first) and `concerns`, and no `verdict`. In the live test Codex judged three moodboards well, measuring contrast from the pixels, but the plan schema made it put its ranking in the summary.
+- `opinion` checks the working folder only when the material concerns it, and `--no-project` says it does not. In all three business opinions Codex first searched the co-codex repository and described it in its summary. `--cwd <folder outside the project>` still gives full isolation.
+- `opinion --json` carries `usage` (the windows before and after) and `context`, like `spawn` and `send` with `--wait`. Opinions are not logged in `usage.jsonl`, which feeds the per-image estimate.
+- `opinion --file` paths are resolved against the current directory and checked before the session starts, so a typo no longer spends a turn, and Codex gets absolute paths whatever its working folder. `opinion --diff`, `--base` and `--commit` now refuse `--mode`, `--file` and `--no-project` instead of ignoring them.
+- Every `--images` run tells Codex that colours a few units off the given hex codes are expected: no regenerating or edit passes to correct colour precision. In one `high` run such passes made 6 generations for 3 kept images and still did not reach the exact values.
+- `cleanup` that lists nothing says how many matching sessions it kept, still loaded or used after the cutoff (`held` in `--json`). The docs no longer suggest running it right after a batch.
+- `doctor` says whether the installed plugin or the copy you ran is older and which version the launcher runs, tells a copy without a plugin to update from GitHub, and no longer says to call the launcher when the launcher would run the older plugin.
+- Docs: business examples with their briefs (`docs/examples/`), a new picture at the top of the README, brief templates for moodboards and social media templates, output sizes for 4:5 (1122x1402) and 9:16 (941x1672).
+
 ## 0.5.0 (2026-10-31)
 
 From a project that used 0.3.0 for a week of game-art batches (about 120 image runs, most of them started in parallel by workflow subagents).

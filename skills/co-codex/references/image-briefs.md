@@ -79,6 +79,11 @@ Make <3> variants that differ in <layout of the hero | card style>. Save them as
 Done when: every label is spelled exactly as given and nothing is cut off at the edges.
 ```
 
+Give charts their data, or at least which series is larger and the trend. Left alone, a mockup
+invents plausible numbers: in a test on 2026-11-03 all three dashboard variants drew more cash
+coming in than going out next to a "Monthly burn" card. Check that the numbers on one screen tell
+one story before you show it.
+
 A mockup is a picture. Use it to pick a direction, then build the screen in code. When to offer
 a mockup round before UI work, and how to use the result: "Mockups before UI code" in `SKILL.md`.
 
@@ -108,6 +113,56 @@ Done when: the directions clearly differ from each other and the text is spelled
 One image holds about one screen (most landscape images come back at 1536x1024), so for a long page
 ask for the hero and one or two sections, or one image per section, instead of the whole page in one
 picture.
+
+### Moodboards
+
+For a brand, a campaign or a social media template, before anything is designed in earnest:
+
+```
+Make <3> moodboards for <what: the social media template | the campaign | the brand> of <company>,
+<who it is for, where it runs>. One image per direction, landscape 3:2.
+Each board is a presentation board on a light neutral background, on a grid, with exactly:
+1. the direction name as the title, top left;
+2. a palette strip of <5> swatches with the hex code printed under each, exactly as given;
+3. a type specimen: "Aa" for the headline and the body typeface, labelled "Headline" and "Body";
+4. <3> sample <posts | ads | slides> in the direction's style, each with the wordmark "<name>":
+   <"<stat or headline>">, <"<quote>" with "<attribution>">, <"<event>" and "<date>">;
+5. one image-style sample (photography or illustration).
+Directions: <1: name, mood, palette hex x5, type style, image style>, <2: ...>, <3: ...>.
+No other text. Same layout on every board, so they compare side by side.
+In your answer, describe each direction in one line.
+Done when: every board has all five parts, the directions clearly differ, and every word and
+hex code is spelled exactly as given.
+```
+
+In a test on 2026-11-03 three boards came back in one `draft` turn of about 2 minutes, with every
+hex code and word right. To choose between them, pass the PNGs to `opinion --mode judge` with
+`--file` (see "Second opinion" in `SKILL.md`), and add `--no-project` when the images are not about
+the project you run it from. Codex opens the images and can measure contrast from the pixels.
+
+### Social media templates
+
+Finalize the chosen direction as a family of formats, with the board as the style reference:
+
+```
+Turn the "<direction>" direction into <3> production templates for <company> on <platform>.
+Image 1 is the style reference only: keep its palette, type and graphic devices, not its layout.
+Palette, exactly: <hex and role, x5>. Contrast: <which colour may carry text on which background>;
+body text at least 4.5:1 against its background.
+Make, in this order:
+1. Square 1:1 <post type>. Text, exactly: "<...>".
+2. Portrait 4:5 <carousel cover>. Text, exactly: "<...>".
+3. Vertical 9:16 <story>. Text, exactly: "<...>". Keep the top 14% and the bottom 20% free of
+   important text (platform UI covers them).
+Every image has the "<wordmark>" in the top left. No other text.
+Done when: every format has its aspect ratio, every word is spelled exactly as given, the contrast
+rule holds, and the images look like one family.
+```
+
+Exact hex values do not survive generation: colours come back a few units off (#080A0F for
+#0B0D12). co-codex tells Codex not to redo images for that; before 0.6.0, one `high` run spent 6
+generations on 3 images chasing it. When the template will be rebuilt in a design tool anyway,
+`--retries 0` saves the remaining checks too.
 
 ### Ad creatives
 

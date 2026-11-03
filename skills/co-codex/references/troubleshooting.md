@@ -31,7 +31,7 @@
 | `the sandbox is fixed when a session starts` | `send` got a `--sandbox` or `--network` other than the session's own (repeating the same one is fine). Spawn a new session for another sandbox. |
 | Exit code 2 | `--timeout` (default 3600 s) passed. Codex keeps working; run `wait <session>`. In Claude Code's foreground Bash, which stops a command after 10 minutes, pass `--timeout 540`. |
 | Exit code 4 | Usage limit, or a window above `--max-used` / `maxUsedPercent` (then nothing was sent). The message names the reset time; `limits` shows all windows. |
-| A script runs an old co-codex after an update | It names a plugin-cache path with a version in it. Call the launcher instead (`doctor` prints its path). `doctor` also says when a newer co-codex is out. |
+| A script runs an old co-codex after an update | It names a plugin-cache path with a version in it. Call the launcher instead (`doctor` prints its path). `doctor` also says whether the installed plugin or the copy you ran is older, which version the launcher runs, and when a newer co-codex is out. |
 | Exit code 5 | Codex answered, but some actions needed an approval that nobody could give (sessions co-codex starts run with approval policy `never`). They are listed on stderr and in `--json` as `declined`. Open `codex resume <name> -a on-request` and let Codex retry there; you approve each action in that window. If the retry needs the network, add `-c sandbox_workspace_write.network_access=true`, or `-s danger-full-access` if you accept that. In a window you hold, declines are your own and co-codex exits 0. |
 | `!` lines on stderr | Codex waits for an approval, or (after a turn) lists the actions it was refused. Answer in the Codex window; co-codex never approves. |
 | Installs, deploys or downloads fail inside Codex | The session has no network access. `spawn` prints `network off` and warns when the task contains a command such as `npm install` or `git push`. The sandbox is fixed per session, so `send` cannot fix it: spawn a new session with `--network`, or with `--sandbox danger-full-access` if you allow it. `doctor` shows Codex's own sandbox settings next to co-codex's. |
@@ -45,8 +45,9 @@
 nobody used for 2 days (`--older-than 30m|12h|2d|1w`, `--name-prefix img-`). Nothing is deleted
 until you add `--yes`. Sessions you started yourself are never listed, and neither is a spawned session whose last message a person typed in a Codex window (shown as skipped). Outside a git repository only sessions of the current folder count, not its subfolders. A session co-codex used
 recently can stay loaded on the daemon for a while after co-codex exits; it counts as open and is
-listed once the daemon has unloaded it. For a single session, `codex delete --force <session uuid>`
-still works.
+listed once the daemon has unloaded it. When `cleanup` lists nothing, it says how many matching
+sessions it kept and why (still loaded, or used after the cutoff). For a single session,
+`codex delete --force <session uuid>` still works.
 
 ## After a Codex update
 

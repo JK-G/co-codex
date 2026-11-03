@@ -530,9 +530,11 @@ test("wait --message finds a message queued behind a running turn; plain wait ta
     assert.match(here.stdout, /from here/);
   });
 test("opinion: fresh read-only session on the high tier, verdict rendered", async t => {
-    const { cli, thread, dir } = sandbox(t);
+    const { cli, thread, dir, proj } = sandbox(t);
     // Even a user config that gives spawned sessions full access must not reach an opinion.
     fs.writeFileSync(path.join(dir, "no-user-config.json"), JSON.stringify({ spawn: { sandbox: "danger-full-access" } }));
+    fs.mkdirSync(path.join(proj, "docs"));
+    fs.writeFileSync(path.join(proj, "docs", "plan.md"), "plan");
     const r = await cli(["opinion", "Rename the column, then deploy.", "--on", "migration plan", "--name", "op1", "--file", "docs/plan.md"]);
     ok(r, "opinion");
     assert.match(r.stdout, /^Verdict: sound-with-changes \(confidence medium\)/);
@@ -546,7 +548,8 @@ test("opinion: fresh read-only session on the high tier, verdict rendered", asyn
     const sent = th.turns[0].input[0].text;
     assert.match(sent, /Second opinion requested on a migration plan\./);
     assert.match(sent, /Claude's conclusion is left out on purpose/);
-    assert.match(sent, /- docs\/plan\.md/);
+    assert.ok(sent.includes(`- ${path.join(proj, "docs", "plan.md")}`), "--file is passed as an absolute path");
+    assert.match(sent, /If the material concerns the project in your working folder, check claims against its code and files\. If it does not, do not search the working folder/);
     assert.match(sent, /Material:\nRename the column, then deploy\.$/);
     assert.ok(th.turns[0].outputSchema, "the turn asks for structured output");
   });
@@ -561,6 +564,54 @@ test("opinion: fresh read-only session on the high tier, verdict rendered", asyn
     assert.equal(out.opinion.concerns[0].severity, "high");
     assert.equal(out.text, null);
     assert.match(thread("op2").turns[0].input[0].text, /Try to refute it/);
+    assert.deepEqual(out.usage, { fiveHour: { before: 12, after: 12 }, weekly: { before: 40, after: 40 } });
+    assert.deepEqual(out.context, { tokens: 12000, window: 475000, percent: 3, totalTokens: 24000 });
+  });
+
+  test("opinion --no-project tells Codex not to search the working folder", async t => {
+    const { cli, thread } = sandbox(t);
+    ok(await cli(["opinion", "Larkspur ad copy", "--no-project", "--name", "op5"]));
+    const sent = thread("op5").turns[0].input[0].text;
+    assert.match(sent, /The material is not about the project in your working folder: do not search or browse that folder beyond the files listed above, and do not mention it in your answer\./);
+    assert.doesNotMatch(sent, /If the material concerns/);
+    const diff = await cli(["opinion", "--diff", "--no-project"]);
+    assert.equal(diff.code, 1);
+    assert.match(diff.stderr, /--no-project does not work with --diff/);
+  });
+
+  test("opinion --mode judge ranks options and names a winner", async t => {
+    const { cli, thread, proj } = sandbox(t);
+    fs.writeFileSync(path.join(proj, "a.png"), "a");
+    fs.writeFileSync(path.join(proj, "b.png"), "b");
+    const r = await cli(["opinion", "Pick the hero for a fintech landing page", "--mode", "judge", "--file", "a.png", "--file", "b.png", "--name", "j1"]);
+    ok(r, "judge");
+    assert.match(r.stdout, /^Winner: b\.png \(confidence high\)\nmock judgement\n\nRanking:\n  1\. b\.png: clearest\n      evidence: contrast 7\.1:1\n  2\. a\.png: busy\n\nMust change in the winner:\n  \[medium\] logo too small/);
+    assert.match(r.stderr, /read-only, judge opinion/);
+    const th = thread("j1");
+    const sent = th.turns[0].input[0].text;
+    assert.match(sent, /Second opinion requested on a choice between options\./);
+    assert.match(sent, /rank them all, best first/);
+    assert.match(sent, /Claude's pick is left out on purpose/);
+    assert.match(sent, /name each one by its path exactly as listed here, in winner and in ranking/);
+    assert.match(sent, /If the material concerns the project in your working folder/);
+    assert.ok(th.turns[0].outputSchema.required.includes("winner"));
+    assert.ok(th.turns[0].outputSchema.required.includes("ranking"));
+    assert.ok(!th.turns[0].outputSchema.required.includes("verdict"));
+    assert.equal(th.sandbox, "read-only");
+    const out = json(await cli(["opinion", "Pick one", "--mode", "judge", "--file", "a.png", "--file", "b.png", "--name", "j2", "--json"]));
+    assert.equal(out.mode, "judge");
+    assert.equal(out.opinion.winner, "b.png");
+    assert.equal(out.opinion.ranking.length, 2);
+    assert.equal(out.opinion.verdict, undefined);
+    assert.equal(out.text, null);
+  });
+
+  test("opinion reports the windows around its turn and logs nothing", async t => {
+    const { cli, dir } = sandbox(t);
+    const out = json(await cli(["opinion", "[[images:1]] judge these", "--name", "op6", "--json"]));
+    assert.deepEqual(out.usage, { fiveHour: { before: 12, after: 14 }, weekly: { before: 40, after: 41 } });
+    assert.ok(fs.existsSync(path.join(dir, "xdg", "co-codex")), "the launcher folder exists, so the next check is not vacuous");
+    assert.ok(!fs.existsSync(path.join(dir, "xdg", "co-codex", "usage.jsonl")), "opinions are not logged for the image estimate");
   });
 
   test("opinion shows Codex's text when it ignores the schema", async t => {
@@ -584,23 +635,32 @@ test("opinion: fresh read-only session on the high tier, verdict rendered", asyn
     assert.equal(b.kind, "code-review");
     assert.equal(b.text, "mock review of baseBranch main");
     assert.deepEqual(b.target, { type: "baseBranch", branch: "main" });
+    assert.deepEqual(b.usage.fiveHour, { before: 12, after: 12 });
     const c = await cli(["opinion", "--commit", "abc123", "--name", "d3"]);
     ok(c, "--commit");
     assert.equal(c.stdout.trim(), "mock review of commit abc123");
   });
 
-  test("opinion rejects text with --diff, a bad --mode and a taken name", async t => {
-    const { cli } = sandbox(t);
+  test("opinion rejects text with --diff, a bad --mode, a missing --file and a taken name", async t => {
+    const { cli, readState } = sandbox(t);
     const withText = await cli(["opinion", "look here", "--diff"]);
     assert.equal(withText.code, 1);
     assert.match(withText.stderr, /takes no text/);
     const mode = await cli(["opinion", "plan", "--mode", "angry"]);
     assert.equal(mode.code, 1);
-    assert.match(mode.stderr, /--mode must be one of independent, challenge/);
+    assert.match(mode.stderr, /--mode must be one of independent, challenge, judge/);
     ok(await cli(["opinion", "plan", "--name", "same"]));
     const taken = await cli(["opinion", "plan", "--name", "same"]);
     assert.equal(taken.code, 1);
     assert.match(taken.stderr, /a session named "same" already exists/);
+    const before = Object.keys(readState().threads).length;
+    const missing = await cli(["opinion", "plan", "--file", "nope.md", "--name", "nofile"]);
+    assert.equal(missing.code, 1);
+    assert.match(missing.stderr, /--file not found: nope\.md/);
+    assert.equal(Object.keys(readState().threads).length, before, "no session was started");
+    const reviewFlags = await cli(["opinion", "--diff", "--mode", "judge"]);
+    assert.equal(reviewFlags.code, 1);
+    assert.match(reviewFlags.stderr, /--mode and --file do not work with --diff/);
   });
 
   // ------------------------------------------------------------ 0.3.0
@@ -868,6 +928,25 @@ test("opinion: fresh read-only session on the high tier, verdict rendered", asyn
     assert.match(plain.stderr, /2 image\(s\) generated \(1254x1254, 1538x1022\)/);
   });
 
+  test("cleanup right after a batch says how many matching sessions it kept, and why", async t => {
+    const { cli, seed } = sandbox(t);
+    const now = Math.floor(Date.now() / 1000);
+    seed([
+      { name: "biz-a", threadSource: "co-codex", loaded: true, updatedAt: now - 60 },
+      { name: "biz-b", threadSource: "co-codex", loaded: false, updatedAt: now - 60 },
+      { name: "biz-own", threadSource: "cli", loaded: false, updatedAt: now - 60 },
+    ]);
+    const r = await cli(["cleanup", "--name-prefix", "biz-", "--older-than", "30m"]);
+    ok(r);
+    assert.match(r.stdout, /Nothing to clean up yet: 2 session\(s\) co-codex started in this project named biz-\* are kept: 1 still loaded on the daemon or open in a window, 1 used after .*run cleanup again later, or with a shorter --older-than\./);
+    const out = json(await cli(["cleanup", "--name-prefix", "biz-", "--older-than", "30m", "--json"]));
+    assert.deepEqual(out.sessions, []);
+    assert.deepEqual(out.held, { open: 1, newer: 1, capped: false });
+    const none = await cli(["cleanup", "--name-prefix", "zzz-"]);
+    ok(none);
+    assert.match(none.stdout, /^Nothing to clean up: no session co-codex started in this project with a name starting "zzz-"/);
+  });
+
   test("cleanup lists only closed, old sessions co-codex started here; --yes deletes them", async t => {
     const { cli, seed, readState, dir, proj, doneTurn } = sandbox(t);
     const now = Math.floor(Date.now() / 1000);
@@ -898,6 +977,7 @@ test("opinion: fresh read-only session on the high tier, verdict rendered", asyn
     assert.equal(prefixed.dryRun, true);
     assert.deepEqual(prefixed.sessions.map(s => s.name).sort(), ["img-a", "img-signed"]);
     assert.deepEqual(prefixed.skipped, [{ threadId: id(8), name: "img-taken", reason: "used in a Codex window" }]);
+    assert.deepEqual(prefixed.held, { open: 1, newer: 1, capped: false }); // img-open is loaded, img-fresh is newer
 
     const shorter = json(await cli(["cleanup", "--older-than", "5m", "--json"]));
     assert.deepEqual(shorter.sessions.map(s => s.name).sort(), ["img-a", "img-fresh", "img-signed", "q-b"]);
@@ -910,7 +990,7 @@ test("opinion: fresh read-only session on the high tier, verdict rendered", asyn
     assert.match(rest.stdout, /deleted 00000000-0000-4000-8000-000000000002  q-b/);
     const nothing = await cli(["cleanup"]);
     ok(nothing);
-    assert.match(nothing.stdout, /Nothing to clean up/);
+    assert.match(nothing.stdout, /Nothing to clean up yet: 2 session\(s\) co-codex started in this project are kept: 1 still loaded on the daemon or open in a window, 1 used after /);
     const bad = await cli(["cleanup", "--older-than", "2 days"]);
     assert.equal(bad.code, 1);
     assert.match(bad.stderr, /--older-than takes a number and a unit/);
@@ -1002,15 +1082,21 @@ test("opinion: fresh read-only session on the high tier, verdict rendered", asyn
     assert.match(bad.stderr, /--max-used \(maxUsedPercent\) must be a number from 0 to 100/);
   });
 
-  test("--retries replaces the tier's regeneration rule and needs --images; no regenerating for pixel sizes", async t => {
+  test("--retries replaces the tier's regeneration rule and needs --images; no regenerating for pixel sizes or exact colours", async t => {
     const { cli, thread } = sandbox(t);
     ok(await cli(["spawn", "[[image]] dots", "--name", "r0", "--tier", "high", "--images", "--retries", "0", "--wait"]));
     const sent = thread("r0").turns[0].input[0].text;
     assert.match(sent, /regenerate failures up to 2 times/); // the tier's rule stays...
     assert.match(sent, /Regeneration: make one attempt per image and do not regenerate; .*This replaces any regeneration rule above\./); // ...and is overridden after it
     assert.match(sent, /do not regenerate an image only because its pixel size differs from the brief/);
+    assert.match(sent, /cannot hit exact colour codes/);
+    assert.match(sent, /do not regenerate or edit an image to correct colour precision/);
     ok(await cli(["spawn", "[[image]] dots", "--name", "r1", "--images", "--retries", "1", "--wait"]));
-    assert.match(thread("r1").turns[0].input[0].text, /regenerate an image at most 1 time, and only when it clearly misses the brief/);
+    const sent1 = thread("r1").turns[0].input[0].text;
+    assert.match(sent1, /regenerate an image at most 1 time, and only when it clearly misses the brief/);
+    assert.match(sent1, /do not regenerate or edit an image to correct colour precision/); // every --images run, any tier
+    ok(await cli(["spawn", "plain", "--name", "r2", "--wait"]));
+    assert.doesNotMatch(thread("r2").turns[0].input[0].text, /colour precision/); // not without --images
     for (const [flags, message] of [
       [["--retries", "1"], /--retries needs --images/],
       [["--images", "--retries", "4"], /--retries must be 0, 1, 2 or 3/],
@@ -1110,13 +1196,14 @@ test("opinion: fresh read-only session on the high tier, verdict rendered", asyn
     assert.equal(installed.stdout.trim(), "installed copy help");
   });
 
-  test("doctor names this version, an installed plugin of another version, the launcher and a newer release", async t => {
+  test("doctor names this version, which copy is older, what the launcher runs and a newer release", async t => {
     const { cli, dir } = sandbox(t);
     const version = JSON.parse(fs.readFileSync(path.join(HERE, "..", "package.json"), "utf8")).version;
     const plain = await cli(["doctor"]);
     ok(plain);
     assert.equal(/co-codex\s+(\S+) \(/.exec(plain.stdout)?.[1], version);
     assert.match(plain.stdout, /launcher\s+node ".*co-codex\.mjs" <command>/);
+    assert.match(plain.stdout, new RegExp(`launcher\\s+.*runs this copy, ${version.replace(/\./g, "\\.")}\\)`));
     assert.doesNotMatch(plain.stdout, /^(ok)?\s+update\s/m); // CO_CODEX_UPDATE_URL=off
     const install = path.join(dir, "cache", "0.1.0");
     fs.mkdirSync(path.join(install, "skills", "co-codex", "scripts"), { recursive: true });
@@ -1126,9 +1213,29 @@ test("opinion: fresh read-only session on the high tier, verdict rendered", asyn
     const latest = v => ({ env: { CO_CODEX_UPDATE_URL: "data:application/json," + encodeURIComponent(JSON.stringify({ version: v })) } });
     const old = await cli(["doctor"], latest("99.0.0"));
     ok(old);
-    assert.match(old.stdout, new RegExp(`plugin\\s+Claude Code has co-codex 0\\.1\\.0 installed .*; this copy is ${version.replace(/\./g, "\\.")}`));
-    assert.match(old.stdout, /update\s+co-codex 99\.0\.0 is out, you have 0\.1\.0/);
-    assert.match((await cli(["doctor"], latest("0.1.0"))).stdout, /ok\s+update\s+0\.1\.0 is the newest version/);
+    const v = version.replace(/\./g, "\\.");
+    assert.match(old.stdout, new RegExp(`plugin\\s+Claude Code has co-codex 0\\.1\\.0 installed .*, older than this copy \\(${v}\\)\\. Claude Code and the launcher run 0\\.1\\.0 until the plugin is updated`));
+    assert.match(old.stdout, /launcher\s+.*runs the installed plugin, 0\.1\.0\)/);
+    assert.match(old.stdout, new RegExp(`update\\s+co-codex 99\\.0\\.0 is out; the installed plugin is 0\\.1\\.0, this copy ${v}\\. In Claude Code: /plugin`));
+    assert.doesNotMatch(old.stdout, /call the launcher/); // the launcher would run the older plugin
+    assert.match((await cli(["doctor"], latest("0.1.0"))).stdout, /ok\s+update\s+the installed plugin, 0\.1\.0, is the newest release/);
+    // A plugin newer than this copy: the launcher is the way to run it.
+    fs.writeFileSync(path.join(dir, "claude", "plugins", "installed_plugins.json"), JSON.stringify({ plugins: { "co-codex@co-codex": [{ installPath: install, version: "99.0.0" }] } }));
+    const newerPlugin = await cli(["doctor"]);
+    ok(newerPlugin);
+    assert.match(newerPlugin.stdout, new RegExp(`newer than this copy \\(${v}\\)\\. This path runs old code: call the launcher, which runs 99\\.0\\.0`));
+    assert.match(newerPlugin.stdout, /launcher\s+.*runs the installed plugin, 99\.0\.0\)/);
+    // No plugin: the update goes through GitHub, not /plugin.
+    fs.rmSync(path.join(dir, "claude", "plugins", "installed_plugins.json"));
+    const bare = await cli(["doctor"], latest("99.0.0"));
+    ok(bare);
+    assert.match(bare.stdout, new RegExp(`update\\s+co-codex 99\\.0\\.0 is out; this copy is ${v}\\. Update it from https://github\\.com/JK-G/co-codex`));
+    // A plugin entry without a version is not reported as the newest release.
+    fs.writeFileSync(path.join(dir, "claude", "plugins", "installed_plugins.json"), JSON.stringify({ plugins: { "co-codex@co-codex": [{ installPath: install }] } }));
+    const unknown = await cli(["doctor"], latest("99.0.0"));
+    ok(unknown);
+    assert.match(unknown.stdout, /update\s+the installed plugin's version is unknown; the newest co-codex is 99\.0\.0/);
+    assert.doesNotMatch(unknown.stdout, /is the newest release/);
     assert.match((await cli(["doctor"], { env: { CO_CODEX_UPDATE_URL: "http://127.0.0.1:9/package.json" } })).stdout, /update\s+not checked:/);
   });
 });

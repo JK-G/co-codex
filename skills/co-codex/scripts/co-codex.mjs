@@ -38,10 +38,13 @@ Sessions
                                       --yes deletes them. Never touches sessions co-codex did not start
 
 Second opinion (read-only, in addition to your own review)
-  opinion <text|-> [--on <what>] [--mode independent|challenge] [--file <path>]... [--tier <name>]
+  opinion <text|-> [--on <what>] [--mode independent|challenge|judge] [--file <path>]... [--no-project] [--tier <name>]
                                       Fresh read-only session; Codex reviews a plan, decision, design or
                                       text and answers with a verdict, ranked concerns, alternatives and
-                                      questions. challenge: the text carries your position, Codex attacks it
+                                      questions. challenge: the text carries your position, Codex attacks it.
+                                      judge: the text or the --file paths name two or more options; Codex
+                                      ranks them, picks a winner and says what must change in it.
+                                      --no-project: the material is not about this folder; Codex does not search it
   opinion --diff | --base <branch> | --commit <sha> [--tier <name>]
                                       Codex's built-in code reviewer on uncommitted changes, a branch or a commit
                                       (default tier for opinions: high; --name, --cwd, --timeout, --max-used, --json work too)
@@ -95,7 +98,7 @@ const ALL_SOURCES = ["cli", "vscode", "exec", "appServer", "unknown"]; // thread
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SELF = fileURLToPath(import.meta.url);
 const SKILL_DIR = path.resolve(path.dirname(SELF), "..");
-const FLAGS = new Set(["wait", "all", "json", "images", "subagents", "fast", "write", "keep", "diff", "network", "yes", "replace"]);
+const FLAGS = new Set(["wait", "all", "json", "images", "subagents", "fast", "write", "keep", "diff", "network", "yes", "replace", "no-project"]);
 const VALUES = new Set([
   "name", "tier", "model", "effort", "timeout", "out", "cwd", "sandbox", "turns", "turn", "message", "ref", "on", "mode", "file", "base", "commit",
   "names", "older-than", "name-prefix", "estimate", "max-used", "retries",
@@ -114,18 +117,33 @@ const SUBAGENTS_NOTE =
   "Split this work across your subagents (for example one per image or per group of related images) and run them " +
   "in parallel. Give each subagent its own files; only you edit shared files such as logs or indexes, from their reports.";
 // Codex does not see where its image tool saves files; co-codex collects them from the turn itself.
-// The image tool picks its own output size, so regenerating to hit exact pixels only spends quota.
+// The image tool picks its own output size and lands a few units off exact colours, so redoing an
+// image for either only spends quota (seen live: 6 generations for 3 images, chasing hex values).
 const IMAGES_NOTE =
   "You do not need to report where generated images are stored; they are collected from this turn automatically. " +
   "If the task asks you to save images to files, end your answer with those file paths. " +
   "The image tool picks its own output size: do not regenerate an image only because its pixel size differs from the brief; " +
-  "it is resized afterwards.";
+  "it is resized afterwards. It also cannot hit exact colour codes: colours a few units off the given hex values are " +
+  "expected and not a miss, so do not regenerate or edit an image to correct colour precision. Redo for colour only when " +
+  "a colour is visibly wrong (another hue, or used in the wrong role).";
 // --retries: replaces the tier's regeneration rule, for callers that check and fix the images themselves.
 const retriesNote = n => n === 0
   ? "Regeneration: make one attempt per image and do not regenerate; the images are checked after this turn. This replaces any regeneration rule above."
   : `Regeneration: regenerate an image at most ${n} time${n === 1 ? "" : "s"}, and only when it clearly misses the brief. This replaces any regeneration rule above.`;
 
-const OPINION_MODES = ["independent", "challenge"];
+const OPINION_MODES = ["independent", "challenge", "judge"];
+const CONCERN = {
+  type: "object",
+  additionalProperties: false,
+  required: ["severity", "point", "why", "suggestion", "evidence"],
+  properties: {
+    severity: { type: "string", enum: ["high", "medium", "low"] },
+    point: { type: "string" },
+    why: { type: "string" },
+    suggestion: { type: "string" },
+    evidence: { type: "string" },
+  },
+};
 // The final message of an opinion turn is constrained to this shape (strict: every key required).
 const OPINION_SCHEMA = {
   type: "object",
@@ -136,21 +154,31 @@ const OPINION_SCHEMA = {
     confidence: { type: "string", enum: ["low", "medium", "high"] },
     summary: { type: "string" },
     agreements: { type: "array", items: { type: "string" } },
-    concerns: {
+    concerns: { type: "array", items: CONCERN },
+    alternatives: { type: "array", items: { type: "string" } },
+    questions: { type: "array", items: { type: "string" } },
+  },
+};
+// A choice between options: a winner, every option ranked best first, and what must change in the winner.
+// The array order is the ranking, so the schema needs no rank numbers that could repeat or skip.
+const JUDGE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["winner", "confidence", "summary", "ranking", "concerns", "alternatives", "questions"],
+  properties: {
+    winner: { type: "string" },
+    confidence: { type: "string", enum: ["low", "medium", "high"] },
+    summary: { type: "string" },
+    ranking: {
       type: "array",
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["severity", "point", "why", "suggestion", "evidence"],
-        properties: {
-          severity: { type: "string", enum: ["high", "medium", "low"] },
-          point: { type: "string" },
-          why: { type: "string" },
-          suggestion: { type: "string" },
-          evidence: { type: "string" },
-        },
+        required: ["option", "why", "evidence"],
+        properties: { option: { type: "string" }, why: { type: "string" }, evidence: { type: "string" } },
       },
     },
+    concerns: { type: "array", items: CONCERN },
     alternatives: { type: "array", items: { type: "string" } },
     questions: { type: "array", items: { type: "string" } },
   },
@@ -603,29 +631,60 @@ function failIfBad(turn, limit, refused = []) {
   if (refused.length) throw new BridgeError(`Codex answered, but ${refused.length} action(s) were refused because they need approval (listed above)`, 5);
 }
 
-function opinionPrompt(config, material, { on, mode, files }) {
+function opinionPrompt(config, material, { on, mode, files, project = true }) {
+  const judge = mode === "judge";
+  const stance = mode === "challenge"
+    ? "The material includes Claude's position. Try to refute it: make the strongest case against it, name the assumption " +
+      "most likely to be wrong, and say what evidence would change the conclusion. Concede the points that hold."
+    : judge
+      ? "Judge the options yourself. Claude's pick is left out on purpose, so it does not anchor you."
+      : "Form your own view. Claude's conclusion is left out on purpose, so it does not anchor you.";
+  const fileList = files.length
+    ? `Read these files yourself rather than trusting any summary${judge ? "; when the options are these files, name each one by its path exactly as listed here, in winner and in ranking" : ""}:\n${files.map(f => `- ${f}`).join("\n")}`
+    : "";
+  // Seen live: with an unconditional "check this project", Codex searched an unrelated repository and described it in its summary.
+  const projectRule = project
+    ? "If the material concerns the project in your working folder, check claims against its code and files. If it does not, " +
+      "do not search the working folder and do not describe it in your answer; judge the material and any files listed above."
+    : "The material is not about the project in your working folder: do not search or browse that folder beyond the files " +
+      "listed above, and do not mention it in your answer. Judge the material and those files on their own.";
+  const task = judge
+    ? "Judge every option against the goal and constraints in the material, then rank them all, best first. winner is the " +
+      "best option's name exactly as given (for a file, its path as listed), or \"none\" when no option is acceptable as it stands. ranking lists every option " +
+      "once, with why it ranks there and your evidence. concerns are what must change in the winner before it is used, not " +
+      "the faults of the options ranked lower; an empty list is a valid answer. alternatives: a better option than any of " +
+      "these, such as a mix of two, only when you have grounds. For images, measure contrast, colours and sizes from the " +
+      "pixels where the goal depends on them, and put the numbers and how you measured them in evidence. Do not invent " +
+      "problems to seem useful. Severity: high means the winner would fail the goal or a hard constraint; medium means a " +
+      "real cost or risk; low means an improvement."
+    : "Look for wrong assumptions, missing steps, risks and failure modes, ordering problems, and simpler or safer " +
+      "alternatives. Disagree where you have grounds and say why; agree briefly where it is sound. Do not invent problems " +
+      "to seem useful: an empty concerns list is a valid answer. Severity: high means it would cause failure, data loss, " +
+      "a security problem or large rework; medium means real cost or risk; low means an improvement. Put a file path with " +
+      "line, a command output or a quote in evidence when you have one.";
   return [
     config.signature,
     `Second opinion requested on a ${on}. Claude, another AI agent, is working on this with the user. The user wants ` +
       "your independent view in addition to Claude's own review, not instead of it. You are read-only here: do not change any files.",
-    mode === "challenge"
-      ? "The material includes Claude's position. Try to refute it: make the strongest case against it, name the assumption " +
-        "most likely to be wrong, and say what evidence would change the conclusion. Concede the points that hold."
-      : "Form your own view. Claude's conclusion is left out on purpose, so it does not anchor you.",
-    files.length ? `Read these files yourself rather than trusting any summary:\n${files.map(f => `- ${f}`).join("\n")}` : "",
-    "Check claims against the code and files of this project where you can. Look for wrong assumptions, missing steps, " +
-      "risks and failure modes, ordering problems, and simpler or safer alternatives. Disagree where you have grounds and say " +
-      "why; agree briefly where it is sound. Do not invent problems to seem useful: an empty concerns list is a valid answer. " +
-      "Severity: high means it would cause failure, data loss, a security problem or large rework; medium means real cost " +
-      "or risk; low means an improvement. Put a file path with line, a command output or a quote in evidence when you have one.",
+    stance,
+    fileList,
+    `${projectRule} ${task}`,
     `Material:\n${material.trim()}`,
   ].filter(Boolean).join("\n\n");
 }
 
-function renderOpinion(o) {
-  const out = [`Verdict: ${o.verdict} (confidence ${o.confidence})`, o.summary];
+function renderOpinion(o, mode) {
+  const judge = mode === "judge";
+  const out = [judge ? `Winner: ${o.winner ?? "?"} (confidence ${o.confidence ?? "?"})` : `Verdict: ${o.verdict ?? "?"} (confidence ${o.confidence ?? "?"})`, o.summary];
+  if (judge && o.ranking?.length) {
+    out.push("", "Ranking:");
+    o.ranking.forEach((r, i) => {
+      out.push(`  ${i + 1}. ${r.option}: ${r.why}`);
+      if (r.evidence) out.push(`      evidence: ${r.evidence}`);
+    });
+  }
   if (o.concerns?.length) {
-    out.push("", "Concerns:");
+    out.push("", judge && o.winner !== "none" ? "Must change in the winner:" : "Concerns:");
     for (const c of o.concerns) {
       out.push(`  [${c.severity}] ${c.point}`);
       if (c.why) out.push(`      why: ${c.why}`);
@@ -861,8 +920,18 @@ const commands = {
     if (diff && pos[0]) throw new BridgeError("opinion --diff/--base/--commit reviews code changes and takes no text; for a focused review, pass the text without them");
     const mode = opt.mode ?? "independent";
     if (!OPINION_MODES.includes(mode)) throw new BridgeError(`--mode must be one of ${OPINION_MODES.join(", ")}`);
+    if (diff && opt["no-project"]) throw new BridgeError("--no-project does not work with --diff/--base/--commit, which review this project's code");
+    if (diff && (opt.mode || opt.file)) throw new BridgeError("--mode and --file do not work with --diff/--base/--commit: Codex's code reviewer takes neither");
+    // Paths resolve against the shell's cwd, like --ref and --out, and a typo is caught before a session starts.
+    const files = (opt.file ?? []).map(f => {
+      const abs = path.resolve(f);
+      if (!existsSync(abs)) throw new BridgeError(`--file not found: ${f} (paths resolve against the current directory, also with --cwd)`);
+      return abs;
+    });
     const run = await chooseRun(rpc, ctx.config, { ...opt, tier: opt.tier ?? ctx.config.opinionTier ?? "high" });
-    const material = diff ? null : opinionPrompt(ctx.config, await readText(pos[0]), { on: opt.on ?? "plan", mode, files: opt.file ?? [] });
+    const material = diff ? null : opinionPrompt(ctx.config, await readText(pos[0]), {
+      on: opt.on ?? (mode === "judge" ? "choice between options" : "plan"), mode, files, project: !opt["no-project"],
+    });
     const timeoutS = timeoutOf(opt);
     const name = opt.name ?? `opinion-${new Date().toISOString().replace(/\D/g, "").slice(2, 14)}`;
     if ((await sessionsNamed(rpc, name)).length) throw new BridgeError(`a session named "${name}" already exists; pick another --name`);
@@ -877,18 +946,22 @@ const commands = {
     const { thread } = started;
     Object.assign(run, { threadId: thread.id, name, model: started.model ?? run.model });
     await rpc.request("thread/name/set", { threadId: thread.id, name });
+    // Reported, not logged: usage.jsonl is for the per-image estimate, and an opinion makes no images.
+    const before = await readWindows(rpc);
     let turn, target = null;
     if (diff) {
       target = opt.commit ? { type: "commit", sha: opt.commit } : opt.base ? { type: "baseBranch", branch: opt.base } : { type: "uncommittedChanges" };
       if (run.effort) await rpc.request("thread/settings/update", { threadId: thread.id, effort: run.effort });
       ({ turn } = await rpc.request("review/start", { threadId: thread.id, target, delivery: "inline" }));
     } else {
-      ({ turn } = await rpc.request("turn/start", { threadId: thread.id, input: [{ type: "text", text: material }], outputSchema: OPINION_SCHEMA, ...(run.effort ? { effort: run.effort } : {}) }));
+      ({ turn } = await rpc.request("turn/start", { threadId: thread.id, input: [{ type: "text", text: material }], outputSchema: mode === "judge" ? JUDGE_SCHEMA : OPINION_SCHEMA, ...(run.effort ? { effort: run.effort } : {}) }));
     }
     const what = !diff ? `${mode} opinion` : target.type === "commit" ? `code review of ${target.sha}` : target.type === "baseBranch" ? `code review against ${target.branch}` : "code review of uncommitted changes";
     console.error(`asked Codex for a second opinion: "${name}" ${thread.id} (${run.model ?? "default model"}${run.effort ? " / " + run.effort : ""}, read-only, ${what})`);
     const done = await waitForTurn(rpc, thread.id, { turnId: turn.id, timeoutS, subscribed: true });
     const limit = await usageLimit(rpc, done, []);
+    const usage = usageReport(before, await readWindows(rpc));
+    const context = contextOf(tokenUsage.get(thread.id));
     const answer = finalAnswer(done.items ?? []);
     const review = diff ? ((done.items ?? []).filter(i => i.type === "exitedReviewMode" && i.review?.trim()).pop()?.review ?? answer) : null;
     let parsed = null;
@@ -898,10 +971,10 @@ const commands = {
       printJson({
         threadId: thread.id, name, kind: diff ? "code-review" : "opinion", mode: diff ? null : mode, target,
         model: run.model ?? null, effort: run.effort ?? null, status: done.status,
-        opinion: parsed, text: text || null, error: done.error?.message ?? null, limit,
+        opinion: parsed, text: text || null, error: done.error?.message ?? null, limit, usage, context,
       });
     } else if (parsed || text) {
-      console.log(parsed ? renderOpinion(parsed) : text);
+      console.log(parsed ? renderOpinion(parsed, mode) : text);
     }
     failIfBad(done, limit);
   },
@@ -924,8 +997,20 @@ const commands = {
     // Outside a git repository the root is just the working directory, and a prefix match from a
     // parent folder would reach every project below it: there only that exact folder counts.
     const here = ctx.git ? t => inside(t.cwd, ctx.root) : t => samePath(t.cwd, ctx.root);
-    const maybe = [...listed.values()].filter(t => !open.has(t.id) && !isSubagent(t) && here(t) &&
-      (t.updatedAt ?? t.createdAt ?? Infinity) < cutoff && (!prefix || (t.name ?? "").startsWith(prefix)));
+    const matches = t => !isSubagent(t) && here(t) && (!prefix || (t.name ?? "").startsWith(prefix));
+    const older = t => (t.updatedAt ?? t.createdAt ?? Infinity) < cutoff;
+    const all = [...listed.values()].filter(matches);
+    const maybe = all.filter(t => !open.has(t.id) && older(t));
+    // Sessions that match but are still loaded or too new are counted, so an empty list right after
+    // a batch says why. thread/list leaves threadSource out, so each one costs a thread/read: capped.
+    const HELD_CAP = 50;
+    const heldCandidates = all.filter(t => open.has(t.id) || !older(t));
+    const held = { open: 0, newer: 0, capped: heldCandidates.length > HELD_CAP };
+    for (const t of heldCandidates.slice(0, HELD_CAP)) {
+      const full = await readThread(rpc, t.id).catch(() => null);
+      if (full?.threadSource !== SOURCE || isSubagent(full)) continue;
+      if (open.has(t.id)) held.open++; else held.newer++;
+    }
     const stale = [], skipped = [];
     for (const t of maybe) { // thread/list leaves threadSource out; thread/read has it
       const full = await readThread(rpc, t.id).catch(() => null);
@@ -948,13 +1033,23 @@ const commands = {
     }
     const confirm = `cleanup --older-than ${olderThan}${prefix ? ` --name-prefix ${shellArg(prefix)}` : ""} --yes`;
     if (opt.json) {
-      printJson({ olderThan, cutoff: new Date(cutoff * 1000).toISOString(), namePrefix: prefix, dryRun: !opt.yes, sessions: results, skipped });
+      printJson({ olderThan, cutoff: new Date(cutoff * 1000).toISOString(), namePrefix: prefix, dryRun: !opt.yes, sessions: results, skipped, held });
       if (results.some(r => r.error)) throw new BridgeError("some sessions could not be deleted (see the JSON)");
       return;
     }
     for (const s of skipped) console.log(`skipped ${s.threadId}  ${s.name ?? "(no name)"}: ${s.reason}`);
     if (!results.length) {
-      console.log(`Nothing to clean up: no session co-codex started in this project${prefix ? ` with a name starting "${prefix}"` : ""} is closed and unused since ${localTime(cutoff)}.`);
+      const n = held.open + held.newer;
+      if (!n) console.log(`Nothing to clean up: no session co-codex started in this project${prefix ? ` with a name starting "${prefix}"` : ""} is closed and unused since ${localTime(cutoff)}.`);
+      else {
+        const why = [
+          held.open && `${held.open} still loaded on the daemon or open in a window`,
+          held.newer && `${held.newer} used after ${localTime(cutoff)}`,
+        ].filter(Boolean).join(", ");
+        console.log(`Nothing to clean up yet: ${held.capped ? "at least " : ""}${n} session(s) co-codex started in this project` +
+          `${prefix ? ` named ${prefix}*` : ""} are kept: ${why}. A session the daemon still holds is listed once it unloads it; ` +
+          `run cleanup again later${held.newer ? ", or with a shorter --older-than" : ""}.`);
+      }
     } else if (!opt.yes) {
       console.log(`Sessions co-codex started in this project, open nowhere, last used before ${localTime(cutoff)}${prefix ? `, named ${prefix}*` : ""}:`);
       for (const t of stale) console.log(`  ${t.id}  ${(t.name ?? "(no name)").padEnd(22)} ${localTime(t.updatedAt)}  ${oneLine(t.preview, 50)}`);
@@ -1004,12 +1099,18 @@ async function doctor(ctx) {
   const self = ownVersion(SKILL_DIR);
   note("co-codex", `${self ?? "version unknown"} (${SKILL_DIR})`);
   const plugin = installedPlugins()[0] ?? null;
-  if (plugin && !samePath(plugin.installPath, path.resolve(SKILL_DIR, "..", "..")) && plugin.version !== self) {
-    note("plugin", `Claude Code has co-codex ${plugin.version ?? "?"} installed (${plugin.installPath}); this copy is ${self ?? "?"}. ` +
-      "A script with a versioned plugin path keeps running old code: call the launcher instead");
+  const pv = plugin?.version ?? null;
+  // Say which copy is older and what the launcher runs: it runs the installed plugin when there is one.
+  if (plugin && !samePath(plugin.installPath, path.resolve(SKILL_DIR, "..", "..")) && pv !== self) {
+    const where = `Claude Code has co-codex ${pv ?? "?"} installed (${plugin.installPath})`;
+    if (pv && self && newer(pv, self)) note("plugin", `${where}, newer than this copy (${self}). This path runs old code: call the launcher, which runs ${pv}`);
+    else if (pv && self && newer(self, pv)) note("plugin", `${where}, older than this copy (${self}). Claude Code and the launcher run ${pv} until the plugin is updated`);
+    else note("plugin", `${where}; this copy is ${self ?? "?"}. The launcher runs the installed one`);
   }
   const launcher = ensureLauncher(SELF);
-  note("launcher", launcher ? `node "${launcher}" <command> (the same path after every plugin update)` : "could not be written");
+  note("launcher", launcher
+    ? `node "${launcher}" <command> (the same path after every plugin update; runs ${plugin ? `the installed plugin, ${pv ?? "?"}` : `this copy, ${self ?? "?"}`})`
+    : "could not be written");
 
   const bin = findCodex();
   const version = runCodex(["--version"], { timeout: 30_000 });
@@ -1073,11 +1174,15 @@ async function doctor(ctx) {
   const net = mode === "danger-full-access" ? "network on" : mode === "read-only" ? "no network" : "network off unless --network";
   note("spawn", `co-codex starts sessions with sandbox ${mode}, ${net}, approvals ${ctx.config.spawn?.approvalPolicy}`);
   const latest = await latestVersion();
-  const have = plugin?.version ?? self;
-  if (latest.version && have && newer(latest.version, have)) {
-    note("update", `co-codex ${latest.version} is out, you have ${have}. In Claude Code: /plugin, update the co-codex marketplace, then the plugin`);
+  const have = plugin ? pv : self;
+  if (latest.version && plugin && !pv) {
+    note("update", `the installed plugin's version is unknown; the newest co-codex is ${latest.version}`);
+  } else if (latest.version && have && newer(latest.version, have)) {
+    note("update", plugin
+      ? `co-codex ${latest.version} is out; the installed plugin is ${pv}${self && self !== pv ? `, this copy ${self}` : ""}. In Claude Code: /plugin, update the co-codex marketplace, then the plugin`
+      : `co-codex ${latest.version} is out; this copy is ${self}. Update it from https://github.com/JK-G/co-codex`);
   } else if (latest.version) {
-    ok("update", `${have ?? latest.version} is the newest version`);
+    ok("update", plugin ? `the installed plugin, ${pv ?? latest.version}, is the newest release` : `${self ?? latest.version} is the newest version`);
   } else if (latest.error) {
     note("update", `not checked: ${latest.error}`);
   }

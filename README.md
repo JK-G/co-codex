@@ -32,11 +32,11 @@ You need the [Codex CLI](https://developers.openai.com/codex), signed in with a 
 
 Then ask Claude Code: "generate an image of a red apple".
 
-![Pixel-art game assets: a forest camp at dusk, character portraits (a wolf, a panda, a hooded old man, a traveller and three undead), resource and prop icons, six poses of an ogre with a hammer, and spell effect icons.](docs/showcase-game-art.webp)
+![Three moodboards for a social media template (Ledger, Signal, Field), three LinkedIn templates in the Signal style and a finance dashboard mockup. Generated with AI: image.](docs/showcase-business.webp)
 
-Raw art for a 2D pixel-art game prototype: 300 image calls on 15-16 October 2026 on a ChatGPT Plus plan, 222 of them between one afternoon and the next morning. Claude Code wrote the briefs and Codex generated the images with gpt-image-2. co-codex grew out of this run: see [the case behind it](#the-case-behind-it-game-art-on-a-chatgpt-plus-plan).
+Moodboards for a LinkedIn template, the first three posts in the chosen style, and a dashboard mockup, for Larkspur, a made-up B2B analytics company. Claude Code wrote the briefs, and Codex generated every image with AI (gpt-image-2) on a ChatGPT Plus plan on 3 November 2026 and reviewed the drafts before the final round. Each image run took 2 to 6 minutes, and the whole set, reviews included, used 5% of the five-hour window. Step by step, with the briefs: [business examples](docs/examples/business.md).
 
-The same loop works for UI mockups, ad creatives, icons and illustrations.
+co-codex grew out of a run of 300 image calls for a pixel-art game: see [the case behind it](#the-case-behind-it-game-art-on-a-chatgpt-plus-plan).
 
 Unofficial. Not affiliated with OpenAI or Anthropic.
 
@@ -50,12 +50,12 @@ Unofficial. Not affiliated with OpenAI or Anthropic.
 - In a session co-codex started, actions Codex was refused because they needed approval come back as data, with exit code 5, so Claude can tell you what to approve.
 - `limits` shows how much of the five-hour and weekly windows you have used and when they reset. A turn that runs into the limit exits with code 4 and the reset time. `limits --estimate 10` says what 10 images usually cost, from your past image runs, with parallel runs measured together. `--max-used 85` sends nothing while a window is more than 85% used.
 - `cleanup` lists, and with `--yes` deletes, old sessions co-codex started that nobody has open.
-- `opinion` asks Codex for an independent, read-only second opinion on a plan, a decision or a code change, in addition to Claude's own review.
-- `doctor` checks Codex, the daemon, your sign-in, the tier models, and every protocol method co-codex relies on, and says which co-codex version you run and whether a newer one is out.
+- `opinion` asks Codex for an independent, read-only second opinion on a plan, a decision, a code change or a choice between options (`--mode judge`), in addition to Claude's own review.
+- `doctor` checks Codex, the daemon, your sign-in, the tier models, and every protocol method co-codex relies on, and says which co-codex version you run, which copy is older when the installed plugin and the copy you ran differ, and whether a newer one is out.
 
 ## Requirements
 
-- [Codex CLI](https://developers.openai.com/codex), signed in with a ChatGPT plan that includes Codex. Tested with Codex CLI 0.162.1 and app-server 0.163.0.
+- [Codex CLI](https://developers.openai.com/codex), signed in with a ChatGPT plan that includes Codex. Tested with Codex CLI and app-server 0.166.0.
 - Node.js 20 or newer. No npm dependencies.
 - Windows, macOS or Linux (see [Platform support](#platform-support)).
 
@@ -140,6 +140,10 @@ Tiers are plain config. Change them or add your own in `~/.config/co-codex/confi
 
 ## The case behind it: game art on a ChatGPT Plus plan
 
+![Pixel-art game assets: a forest camp at dusk, character portraits (a wolf, a panda, a hooded old man, a traveller and three undead), resource and prop icons, six poses of an ogre with a hammer, and spell effect icons.](docs/showcase-game-art.webp)
+
+Raw art from that run, 15-16 October 2026, without retouching.
+
 A 2D pixel-art game prototype needed character sprite sheets, armour and weapon sets, props, portraits and UI art. Claude Code wrote the task pack (style guide, specs, one prompt file per task) and fitted the finished art into the game. Codex generated the images with gpt-image-2 on a ChatGPT Plus plan: 222 image calls between one afternoon and the next morning. Each problem we hit became part of co-codex:
 
 - **Finding the right file.** Picking the newest file in `~/.codex/generated_images` breaks once subagents generate in parallel. co-codex reads each image's own `savedPath` from the turn and follows subagent threads. One turn of that run produced 74 images across three subagents, and `images --out` copied all of them with their prompts.
@@ -148,16 +152,17 @@ A 2D pixel-art game prototype needed character sprite sheets, armour and weapon 
 - **Consistency.** Redressing a finished base sheet, attached as the edit target, kept all eight figures in place. The brief templates make you name each reference image's role.
 - **Transparency.** Asked for a real transparent background, gpt-image-2 in Codex returned images with an alpha channel.
 
-UI mockups and ads follow the same loop. Explore several variants on `draft`, pick one, then finalize it on `high` with the pick attached through `--ref`. [references/image-briefs.md](skills/co-codex/references/image-briefs.md) has brief templates for sprite sheets, UI mockups, ad creatives in several sizes, and icon sets.
+UI mockups, moodboards and social media templates follow the same loop. Explore several variants on `draft`, pick one, then finalize it on `high` with the pick attached through `--ref`. [references/image-briefs.md](skills/co-codex/references/image-briefs.md) has brief templates for sprite sheets, UI mockups, moodboards, social media templates, ad creatives in several sizes, and icon sets.
 
 ## Second opinion from Codex
 
 Claude can ask Codex to review a plan, a decision, a design or a code change. Codex is a different model family, so it tends to miss different things than Claude does. It is always an extra layer: Claude still does its own review, and you decide.
 
 - It runs only when you ask ("get a second opinion from Codex on this plan", "zapytaj Codexa o zdanie"), or when your CLAUDE.md or Claude's memory says to do it for that kind of work. The second time you ask on similar work, Claude offers to save it as a standing preference.
-- Codex works in a fresh read-only session. It can read the project and check claims against the code, but it cannot change anything.
+- Codex works in a fresh read-only session. It can read the project and check claims against the code, but it cannot change anything. When the material is about something else, `--no-project` tells it not to search the folder.
 - By default Codex does not see Claude's conclusion, so its view is not anchored to it. `--mode challenge` sends Claude's position and asks Codex to refute it.
-- Plans and decisions come back as a verdict (`sound`, `sound-with-changes` or `rethink`), a confidence level, ranked concerns with evidence, alternatives and questions. Code changes go through Codex's built-in reviewer: `--diff` for uncommitted changes, `--base <branch>`, or `--commit <sha>`.
+- Plans and decisions come back as a verdict (`sound`, `sound-with-changes` or `rethink`), a confidence level, ranked concerns with evidence, alternatives and questions. Code changes go through Codex's built-in reviewer: `--diff` for uncommitted changes, `--base <branch>`, or `--commit <sha>`. Choices between options (`--mode judge`) come back as a winner, every option ranked with reasons and evidence, and what must change in the winner.
+- Designs can be images. Pass the PNG files with `--file` (with `--mode judge` to rank them) and Codex opens them: on three dashboard mockups it found a chart that contradicted the KPI cards, and on three moodboards it measured a 2.99:1 text contrast by sampling pixels. Both runs are in the [business examples](docs/examples/business.md), with a review of a pricing plan.
 - Claude then reports where both agree, what Codex found that Claude missed, and where Claude disagrees with Codex and why.
 
 A run from 2026-10-16 on a deliberately flawed migration plan (trimmed):
@@ -193,7 +198,7 @@ On a small diff that changed a bill-splitting function to round every share, `op
 | `read <session> [--turns n]` | Print recent answers |
 | `stop <session>` | Interrupt the running turn |
 | `images <session> [--turns n] [--out dir]` | List or copy the images of recent turns, subagents included |
-| `opinion <text> [--on what] [--mode challenge] [--file path]` | Read-only second opinion on a plan, decision, design or text |
+| `opinion <text> [--on what] [--mode challenge\|judge] [--file path] [--no-project]` | Read-only second opinion on a plan, decision, design or text, or a ranked choice between options |
 | `opinion --diff \| --base <branch> \| --commit <sha>` | Codex's built-in code review of a change |
 | `cleanup [--older-than 2d] [--name-prefix p] [--yes]` | Old sessions co-codex started in this project that no window has open: listed, or deleted with `--yes` |
 | `models` | Models on your account and how each tier resolves |
@@ -208,8 +213,8 @@ Exit codes: 0 answered, 1 co-codex error, 2 timed out (Codex keeps working, run 
 ## Named images, sizes and quota
 
 - `--names a.png,b.png` (with `--images` and `--out`) asks Codex to make the images in that order and to end its answer with a line such as `KEEP: a.png=1, b.png=3`: the position of the kept image among all generations of the turn, retries included. co-codex copies the kept images under those names and the others to `<out>/_rejected/`. Without a usable `KEEP:` line it maps the images in order when the count matches, and says so; otherwise it keeps the item-id names. It never overwrites a different file: a taken name becomes `a-2.png`, or with `--replace` the name gets the new image and the old file moves to `<out>/_rejected/a-replaced.png`. Not with `--subagents`, whose images are numbered in their own threads; images from subagents Codex starts on its own go to `_rejected/` too.
-- gpt-image-2 picks its own output size (seen: 1536x1024 for most landscape images, 1254x1254 square, 1024x1536 portrait, and wide ones such as 1641x958), whatever the brief asks. Every image in the JSON results and the log carries its real `width` and `height`. co-codex has no image library, so it does not resize; use your project's tools when exact pixels matter. Codex is told not to regenerate an image only for its size, and `--retries 0` or `1` limits regenerations further when you measure and fix the images yourself.
-- Runs with `--wait` report `usage`: the five-hour and weekly windows before and after the turn. Each completed `--images` run adds a line to `~/.config/co-codex/usage.jsonl` (`$XDG_CONFIG_HOME` respected), and `limits --estimate <n>` divides the summed window use of those runs by their summed image count. The windows count whole percents, so one small run often reads 0; pooling the runs keeps the ones that moved the window. Runs that overlap in time are measured together, from the first one's start to the last one's end, so parallel runs do not count each other's use. Other Codex use at the same time still counts, so treat the estimate as rough.
+- gpt-image-2 picks its own output size (seen: 1536x1024 for most landscape images, 1254x1254 square, 1024x1536 portrait, 1122x1402 for 4:5, 941x1672 for 9:16, and wide ones such as 1641x958), whatever the brief asks. Every image in the JSON results and the log carries its real `width` and `height`. co-codex has no image library, so it does not resize; use your project's tools when exact pixels matter. Codex is told not to regenerate an image only for its size or for small colour drift from the given hex codes, and `--retries 0` or `1` limits regenerations further when you measure and fix the images yourself.
+- Runs with `--wait`, and every `opinion` that finishes, report `usage`: the five-hour and weekly windows before and after the turn. Opinions are not logged, because the log is for image estimates. Each completed `--images` run adds a line to `~/.config/co-codex/usage.jsonl` (`$XDG_CONFIG_HOME` respected), and `limits --estimate <n>` divides the summed window use of those runs by their summed image count. The windows count whole percents, so one small run often reads 0; pooling the runs keeps the ones that moved the window. Runs that overlap in time are measured together, from the first one's start to the last one's end, so parallel runs do not count each other's use. Other Codex use at the same time still counts, so treat the estimate as rough.
 - `--max-used <pct>` (or `maxUsedPercent` in the config) makes `spawn`, `send` and `opinion` send nothing while the five-hour or weekly window is above that share. They exit with code 4 and the reset time.
 - `--json` results also carry `context`: the session's tokens against its context window. A long session close to full is better replaced by a fresh one.
 
@@ -247,7 +252,7 @@ OpenAI marks the app-server protocol as experimental, and Codex ships often. `do
 
 ## Platform support
 
-- **Windows:** tested live on Windows 11 with Codex CLI 0.162.1.
+- **Windows:** tested live on Windows 11 with Codex CLI 0.166.0 (3 November 2026).
 - **macOS and Linux:** the same code. CI runs the full test suite against a mock Codex on Ubuntu, macOS and Windows. It has not yet been run against a real Codex on macOS or Linux, so reports are welcome.
 
 Paths are compared case-insensitively on Windows and macOS and through `realpath` everywhere. If `codex` is not on your PATH, set `CO_CODEX_BIN` to the executable. More in [references/troubleshooting.md](skills/co-codex/references/troubleshooting.md).
@@ -258,7 +263,7 @@ If you mainly want Codex to review code from inside Claude Code, look at OpenAI'
 
 ## Tests
 
-- `npm test` runs 92 unit and end-to-end tests against a mock Codex. CI runs them on Ubuntu, macOS and Windows with Node 20, 22 and 24.
+- `npm test` runs 106 unit and end-to-end tests against a mock Codex. CI runs them on Ubuntu, macOS and Windows with Node 20, 22 and 24.
 - `claude plugin eval . --no-publish` runs the trigger evals in `evals/`: 11 requests that must load the skill (image requests in English and Polish that never name Codex, a task for Codex, two requests for a second opinion, two new pages to build in HTML and CSS) and 6 that must not (image-processing code, a question about images on a website, a plan review and a code review that do not mention Codex, a general question, a small CSS fix). On 2026-10-16 the first 14 passed twice each with Claude Code 2.1.301, and on 2026-10-24 the three UI evals added in 0.4.0 passed twice each with Claude Code 2.1.310. A full run cost about $4 of Claude usage.
 
 ## License

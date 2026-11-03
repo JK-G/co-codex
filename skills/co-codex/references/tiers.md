@@ -25,11 +25,17 @@ landscape ones came back at 1536x1024, square ones at 1254x1254 and portrait one
 with a few wide sizes such as 1641x958 and 2172x724. So a cheaper tier saves agent tokens and
 retries, not image resolution.
 
+In the business runs on 2026-11-03 a 4:5 brief gave 1122x1402, a 9:16 brief 941x1672, and a
+"desktop 1440x900" brief 1487x1058. Every size seen so far is about 1.57 megapixels. A ratio named
+in the brief (3:2, 4:5, 9:16) was kept; a pixel size was not (1440x900 is 1.6:1, the result 1.41:1).
+That is an observation on one gpt-image-2 version, not a guarantee: the `width` and `height` in the
+JSON are the truth.
+
 `--retries <0-3>` replaces the tier's regeneration rule for one run, without changing its model
 or effort. Use `0` or `1` when the caller measures and post-processes the images anyway: on `high`,
 Codex's own checks redo images whose size or grid it judges wrong, although the fix comes after
 the run. co-codex also tells Codex, on every tier, not to regenerate an image only for its pixel
-size.
+size, nor to regenerate or edit it to correct colours a few units off the given hex codes.
 
 On any tier the output size does not follow the brief: a brief that asked for 1080x1080 got
 1254x1254. co-codex reads each PNG's real `width` and `height` and puts them in the JSON results

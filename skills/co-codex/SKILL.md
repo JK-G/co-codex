@@ -29,7 +29,7 @@ in it into a script. What to paste into their prompt: `references/subagent-brief
 | `wait <session> [--message id]` | Wait for a turn and print its answer (the id `send` prints, else the last queued message, else the latest turn) |
 | `read <session> [--turns n]` / `stop <session>` | Print recent answers, interrupt the running turn |
 | `images <session> [--turns n] [--out dir]` | List or copy the images of recent turns, subagents included |
-| `opinion <text> [--mode challenge]` / `opinion --diff` | Read-only second opinion: a verdict on a plan or decision, or Codex's code review of a diff |
+| `opinion <text> [--mode challenge\|judge] [--no-project]` / `opinion --diff` | Read-only second opinion: a verdict on a plan or decision, a ranked choice between options, or Codex's code review of a diff |
 | `cleanup [--older-than 2d] [--name-prefix p] [--yes]` | List old sessions co-codex started here that no window has open; `--yes` deletes them |
 | `models` / `limits [--estimate n]` / `doctor` | Tier resolution, quota left and reset times (or the expected share for n images), setup check |
 | `init [--write]` | Print, or append to ./AGENTS.md, the note that tells Codex how to answer |
@@ -75,7 +75,7 @@ Do not answer that you cannot make images, and do not interview the user. Go:
 
 The JSON gives each image's real `width` and `height`. gpt-image-2 chooses its own output size
 whatever the brief asks (seen: 1536x1024 for most landscape images, 1254x1254 square, 1024x1536
-portrait, and wide ones such as 1641x958 or 2172x724). When exact pixels matter, resize or crop
+portrait, 1122x1402 for 4:5, 941x1672 for 9:16, and wide ones such as 1641x958 or 2172x724). When exact pixels matter, resize or crop
 the copies afterwards with the project's own tools; co-codex has no image library and does not
 resize. When you measure and post-process the images anyway, add `--retries 0` or `1`: the tier's
 own checks redo images that are fine, and every redo spends quota. Pixel art: `references/image-briefs.md`.
@@ -132,8 +132,9 @@ three pictures takes minutes; recoding a finished page in a direction nobody wan
    which one to build or what to combine. For changes, `send ui-<page-slug> "<change>" --ref
    <chosen file> ...` on the same session. Use `standard` or `high` only when the mockup itself
    will be shown to someone.
-4. Build the chosen variant in code. When the page is done, `cleanup --name-prefix ui-` lists
-   the mockup sessions to delete.
+4. Build the chosen variant in code. Later in the session or the next day, `cleanup --name-prefix
+   ui-` lists the mockup sessions to delete; right after the round they are too new and often still
+   loaded, so it lists none and says how many it kept.
 
 **Using the mockup**
 
@@ -178,9 +179,21 @@ subagent), or for the user's decision.
 
    Use `--mode challenge`, with your position in the text, when the user wants your reasoning
    attacked or when you and the user disagree.
-3. Code changes: `opinion --diff` (uncommitted), `--base <branch>` or `--commit <sha>` runs Codex's
-   built-in code reviewer.
-4. Tier: `high` by default; `max` for decisions that are expensive to undo; `standard` for a
+   When the material is not about the project in the working folder (another client's copy, images
+   made elsewhere, a made-up brand), add `--no-project`, so Codex judges the material instead of
+   searching and describing this repository. For full isolation (no project AGENTS.md either), also
+   pass `--cwd <a folder outside the project>`; `--file` paths resolve against your current directory
+   either way.
+3. Mockups, moodboards, copy variants and other choices between options:
+   `opinion - --mode judge --file a.png --file b.png --json < brief.md`, with the goal and
+   constraints in the text and without your own pick (judge is always independent). The result has
+   `winner` (a file option by its path as listed, or `none` when no option will do), `ranking`
+   (every option with why and evidence, best first) and `concerns` (what must change in the
+   winner); there is no `verdict`. Codex opens the images and can measure contrast from the pixels.
+   Check its numbers before you repeat them.
+4. Code changes: `opinion --diff` (uncommitted), `--base <branch>` or `--commit <sha>` runs Codex's
+   built-in code reviewer. It takes no `--mode`, `--file` or `--no-project`.
+5. Tier: `high` by default; `max` for decisions that are expensive to undo; `standard` for a
    quick check.
 
 **Using the answer**
@@ -188,7 +201,10 @@ subagent), or for the user's decision.
 - Codex's opinion is evidence, not authority. Check every concern against the code or the facts
   before you accept it.
 - Report in three parts: where you and Codex agree, what Codex found that you missed (and whether
-  you verified it), and where you disagree with Codex and why. Quote its verdict and confidence.
+  you verified it), and where you disagree with Codex and why. Quote its verdict (or winner) and
+  confidence.
+- For a judge opinion, compare its ranking with yours option by option and name the winner each of
+  you picked.
 - The user decides. Do not change the plan on Codex's word alone.
 
 ## Before the first task
@@ -318,8 +334,10 @@ creatives: `references/image-briefs.md`.
   the user allows it or their config sets it.
 - Codex cannot message you on its own. If it needs something, it ends its turn with a question,
   which arrives as its answer. Reply with another `send`.
-- Use one name prefix per batch or project (`img-`, `ui-`, or the project's own), and when a batch
-  is checked and delivered, run `cleanup --name-prefix <prefix>` to list its sessions.
+- Use one name prefix per batch or project (`img-`, `ui-`, or the project's own). Right after a
+  batch its sessions are too new and often still loaded on the daemon, so `cleanup` lists none of
+  them and says how many it kept; run `cleanup --name-prefix <prefix>` later in the session or the
+  next day (`--older-than 1h` shortens the cutoff).
 - Clean up throwaway sessions once the user no longer needs them: `cleanup --name-prefix img-`
   lists the ones co-codex started in this project that no window has open and nobody used for 2
   days (`--older-than` changes that); add `--yes` to delete them. It never touches sessions

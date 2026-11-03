@@ -30,8 +30,8 @@ Changes to an image from an earlier run, in the same session:
 Fill in:
 
 - `<launcher path>`: from `doctor`.
-- `<prefix>`: one per batch (`img-`, `ui-`, or the project's own), so `cleanup --name-prefix <prefix>`
-  finds the sessions afterwards.
+- `<prefix>`: one per batch (`img-`, `ui-`, or the project's own), so a later
+  `cleanup --name-prefix <prefix>` finds the sessions.
 - `<tier>`: as in `SKILL.md` ("Choosing a tier").
 - `--max-used <pct>`: the quota ceiling the user or the project set. Leave it out when there is none.
 - `--retries 0` or `1` when the caller measures and post-processes the images anyway (pixel art,

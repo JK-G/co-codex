@@ -18,6 +18,7 @@
 // [[slow]], [[approval]], [[declined]] (refused actions), [[images:N]] (N image generations),
 // [[fail:K]] (generation K fails), [[keep:a.png=1,b.png=3]] (a KEEP line ends the answer),
 // [[error]] (the turn fails with "Bad Request"), [[context:N]] (the turn's token count; default 12000).
+// A turn with an outputSchema answers with a fixed opinion, or a fixed judgement when the schema requires `winner`.
 // Each usable image adds 2% to the 5-hour window and 1% to the weekly one. A turn completes at its `dueAt` time: a timer in the proxy that started
 // it emits the events, and any later read completes overdue turns from the state file, so a turn
 // started by a CLI process that exited early still ends (deterministically) for the next one.
@@ -217,7 +218,12 @@ function complete(s, thread, turn) {
     turn.status = "completed";
     turn.error = null;
   } else if (turn.outputSchema && !text.includes("[[noschema]]")) {
-    const opinion = {
+    const opinion = turn.outputSchema.required?.includes("winner") ? {
+      winner: "b.png", confidence: "high", summary: "mock judgement",
+      ranking: [{ option: "b.png", why: "clearest", evidence: "contrast 7.1:1" }, { option: "a.png", why: "busy", evidence: "" }],
+      concerns: [{ severity: "medium", point: "logo too small", why: "unreadable on mobile", suggestion: "scale it up", evidence: "48px wide" }],
+      alternatives: [], questions: [],
+    } : {
       verdict: "sound-with-changes", confidence: "medium", summary: "mock opinion",
       agreements: ["step order"], alternatives: ["do less"], questions: ["why now?"],
       concerns: [{ severity: "high", point: "no rollback", why: "data loss", suggestion: "add one", evidence: "plan step 3" }],
